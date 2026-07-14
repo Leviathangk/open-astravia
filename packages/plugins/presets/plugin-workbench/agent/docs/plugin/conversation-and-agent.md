@@ -1,0 +1,355 @@
+# 对话 / Agent / 命令 / 文件 / 图像 / 设置 / i18n API
+
+`ctx` 上除 UI 注册外的能力出口，以及配套 React hook。
+
+```ts
+interface PluginContext {
+  plugin: { id: string; version: string };
+  permissions: { has(p): boolean; require(p): void };
+  ui: PluginUiApi;            // 见 ui-slots.md / message-cards.md
+  conversation: PluginConversationApi;
+  agent: PluginAgentApi;
+  command: PluginCommandApi;  // 见「命令执行」
+  fs: PluginFsApi;
+  images: PluginImagesApi;
+  settings: PluginSettingsApi;
+  i18n: PluginI18nApi;        // 见「插件 i18n」
+}
+```
+
+> **MCP 不在 `ctx` 上**：插件内聚 MCP 是 **清单声明式**（`agent.mcpServers`），由宿主聚合进会话，见 [mcp.md](./mcp.md)。
+
+所有对话 API 都作用于**当前活动会话**（桌面同时只展示一个）；插件不能枚举或持有任意会话句柄。
+
+## 对话：读状态
+
+hook 直接从 `@vetta-org/plugin-sdk` import、在组件里调用，读当前活动对话并自动 rerender。需要 `agent.session.read`。
+
+```tsx
+import { useActiveConversation, useConversationMessages } from "@vetta-org/plugin-sdk";
+
+function Sidebar() {
+  const convo = useActiveConversation();
+  // ConversationState: { id, cwd, sessionPath, model, isStreaming }（无会话时各为 null / false）
+  const messages = useConversationMessages();
+  // ConversationMessage[]: { id, role: "user"|"assistant"|"compaction", text, timestamp? }
+  return <div>{convo.isStreaming ? "生成中…" : `${messages.length} 条消息`}</div>;
+}
+```
+
+> 取**活动会话的 sessionId**：从 `convo.sessionPath` 里嵌的 UUID 解析（session 文件名里的 UUID）。`ctx.images.sessionLineages` 等需要它。
+
+## 对话：事件
+
+`ctx.conversation.on(listener)` 推实时事件，返回 `Disposable`。需要 `agent.session.read`。
+
+```ts
+const sub = ctx.conversation.on((event) => {
+  switch (event.type) {
+    case "turn-start": break;
+    case "turn-end": event.stopReason; break;            // "stop" | "aborted" 等
+    case "message-added": event.message; break;           // ConversationMessage
+    case "message-updated": event.delta; break;           // 流式文本增量
+    case "tool-call-start": event.toolCallId; event.toolName; break;
+    case "tool-call-end": event.toolCallId; event.toolName; event.isError; break;
+    case "conversation-changed": event.conversation; break; // 活动会话切换（ConversationState）
+  }
+});
+// 之后：sub.dispose();
+```
+
+## 对话：驾驶
+
+需要 `agent.session.write`。
+
+```ts
+await ctx.conversation.sendPrompt("总结一下这个 diff"); // 发起一轮用户对话（渲染成用户气泡）
+ctx.conversation.insertText("草稿文本");                 // 仅填输入框，不发送，供用户编辑
+await ctx.conversation.abort();                          // 中断当前轮
+```
+
+## 注册 Agent 工具
+
+`ctx.agent.registerTool` 让插件用 JS 注册一个 **agent 可见的工具**：coding-agent 只看到工具 shell（schema + 描述），实际执行经 IPC 回到你的 renderer handler。需要 `agent.tools.register`（注册）+ `agent.toolHandler.execute`（执行）。返回 `Disposable`。
+
+```ts
+interface PluginAgentToolRegistration<TInput = unknown> {
+  id: string;                 // 插件内唯一
+  name?: string;              // LLM 可见工具名（默认取 id）
+  label?: string;
+  description: string;        // 进系统提示词的 Available tools，写清楚何时用
+  parameters: object;         // JSON Schema（可用 TypeBox 产出）
+  scope_use?: string[];       // 允许出现的对话场景（见下）。fail-closed：缺省/空 = 任何场景都不出现
+  requires?: string[];        // 需要的会话能力（如 "knowledge"），一般插件无需设置
+  timeoutMs?: number;
+  context?: { conversation?: "summary" | "messages" }; // 大上下文 opt-in，缺省只传消息数
+  handler: (context: PluginAgentHandlerContext<{
+    kind: "tool-call";
+    timestamp: number;
+    toolCallId: string;
+    toolId: string;
+    toolName: string;
+    input: TInput;
+  }>) => unknown | Promise<unknown>;
+}
+```
+
+```ts
+ctx.agent.registerTool({
+  id: "word-count",
+  description: "统计一段文本的字数。当用户想知道字数时调用。",
+  parameters: {
+    type: "object",
+    properties: { text: { type: "string" } },
+    required: ["text"],
+  },
+  scope_use: ["conversation", "project"],
+  handler: async ({ trigger: { input } }: { trigger: { input: { text: string } } }) => {
+    return { count: input.text.length };
+  },
+});
+```
+
+- handler 的**返回值**会被宿主格式化成工具结果文本回给模型；该工具结果的 `details` 为 `{ pluginId, toolId, result }`（`result` = 你的返回值）。
+- **返回 `cards` 即可产消息卡片**：若返回值含 `cards: CardDescriptor[]`，宿主会把它**提升**到 `details.cards`（消息卡片的 settled 数据源）并从模型可见文本里**剔除**。配合 `ctx.ui.registerCardRenderer` 即可让插件**用自己的工具**在消息下方渲染卡片——见 [message-cards.md](./message-cards.md#第三方插件如何拿到卡片数据)。
+- 插件激活会等待工具 schema 注册完成；注册 / 注销 / 权限或启停变化会刷新空闲的对话 session。
+
+### `scope_use`：按对话场景限定工具出现范围
+
+工具是否暴露给 agent 由 `scope_use` 决定——它和内置工具完全同一套机制。**fail-closed**：不声明 `scope_use`（或给空数组）= 该工具在**任何场景都不出现**。所以注册 agent 工具时**务必显式声明** `scope_use`。
+
+会话场景 slug（7 个）：
+
+| slug | 场景 |
+|---|---|
+| `conversation` | 普通对话（`~/.vetta/conversation`） |
+| `project` | 普通项目中对话 |
+| `im-claw` | Claw IM 对话（飞书/微信网关） |
+| `batch` | 批量任务 |
+| `automation` | 自动化/定时任务 |
+| `kb-processing` | 知识库加工 |
+| `cli` | 裸 CLI / SDK（fallback） |
+
+要点：
+
+- 只声明工具**真正适用**的场景。例如业务查询工具一般给 `["conversation", "project"]`；批量/加工是非交互后台场景，通常不该出现。
+- `scope_use` 只能“减”——它从“宿主已注入的工具”里过滤，不能让工具凭空出现在未注入插件的场景。
+- 输入栏的开关 badge 也会跟随对应工具的 scope：工具在当前场景不出现时，对应 badge 自动隐藏（见 [ui-slots.md](./ui-slots.md#输入栏动作-registerinputaction) 的 `requiresActiveTool`）。
+- `requires` 是另一条正交轴（会话能力，如 `"knowledge"`）；与 `scope_use` 取交集才激活。一般插件无需设置。
+
+## 注册动态系统提示词 Provider
+
+`ctx.agent.registerSystemPromptProvider()` 注册一个 TypeScript handler，在每次 **Agent run 开始、`before_agent_start` 扩展执行前**求值。它适合按插件设置、模型、会话场景、当前消息或工具状态动态生成和修改提示词。需要 `agent.systemPrompt.write`；修改非本插件 block 还需要 `agent.systemPrompt.fullControl`。
+
+```ts
+ctx.agent.registerSystemPromptProvider({
+  id: "domain-guidance",
+  timeoutMs: 3000,
+  context: { systemPrompt: "full", conversation: "messages" }, // 大上下文 opt-in
+  handler(context) {
+    const { plugin, session, model, conversation, runtime, trigger, systemPrompt, actions, host } = context;
+    return [{
+      type: "addBlock",
+      block: {
+        id: `plugin.${plugin.id}.domain-guidance`,
+        content: [
+          String(plugin.settings.instructions ?? ""),
+          `scenario=${session.scenario}`,
+          `model=${model.provider}/${model.id}`,
+          `messages=${conversation.messageCount}`,
+          `tools=${runtime.activeToolNames.join(",")}`,
+          `run=${runtime.runIndex}@${trigger.timestamp}`,
+        ].join("\n"),
+        priority: 850,
+      },
+    }];
+  },
+});
+```
+
+handler 上下文按稳定职责分组：
+
+- `plugin`：插件 id、provider id、主进程读取的最新插件设置快照。
+- `session`：session id、cwd、对话场景。
+- `model`：provider、model id、API、输入能力、context window、最大输出 token。
+- `conversation`：本次调用实际使用的消息快照和消息数（通过 `registration.context.conversation` 控制传 summary 还是 messages）。
+- `runtime`：当前激活/可用工具名、当前 session 的 Agent run 序号。
+- `trigger`：触发类型和时间戳。
+- `systemPrompt`：**可选**。当前 system prompt 快照（base/current 的 blocks 和 rendered 文本）。通过 `registration.context.systemPrompt` 控制传入粒度：`"none"`（缺省，无此字段）、`"blocks"`、`"rendered"`、`"full"`。
+- `actions`：**副作用操作集**，调用后累积到 handler 返回值一并提交，见下表。
+- `host`：宿主简化版 API（`{ fs, conversation }`）。
+
+`registration.context` 控制宿主以什么粒度序列化上下文发过来：
+
+```ts
+{
+  systemPrompt?: "none" | "blocks" | "rendered" | "full"; // 缺省 "none"
+  conversation?: "summary" | "messages";                    // 缺省 "summary"
+}
+```
+
+### 副作用操作集（`actions`）
+
+所有 handler 均可调用，操作暂存到 effects 数组，handler 返回后宿主统一处理：
+
+| 方法 | 效果 |
+|------|------|
+| `actions.systemPrompt.addBlock(block)` | 新增 system prompt 块 |
+| `actions.systemPrompt.replaceBlock(id, block)` | 替换块内容 |
+| `actions.systemPrompt.updateBlock(id, patch)` | 更新块的部分字段 |
+| `actions.systemPrompt.removeBlock(id)` | 删除块 |
+| `actions.systemPrompt.setBlockEnabled(id, enabled)` | 开关块 |
+| `actions.tools.setEnabled(name, enabled)` | 开关工具 |
+| `actions.tools.enable(name)` | 启用工具 |
+| `actions.tools.disable(name)` | 禁用工具 |
+| `actions.continuation.request(result)` | 请求续跑（下一轮注入用户消息） |
+
+返回 operation 按数组顺序执行，支持 `addBlock`、`replaceBlock`、`updateBlock`、`removeBlock`、`setBlockEnabled`、`setToolEnabled`、`requestContinuation`。`write` 权限只能操作 `plugin.<本插件 id>.*`；宿主会校验所有返回值并补齐可信的 block source。handler 异常或超时只跳过该 provider，不阻止模型调用。
+
+## 注册 Agent 自动续跑策略
+
+`ctx.agent.registerContinuationProvider()` 注册一个在 Agent 到达自然停止点时执行的策略。它与
+`conversation.sendPrompt()` 不同：不会立即发起新对话，而是在当前 Agent Loop 没有更多工具、
+steering 或 Todo continuation 后，决定是否注入一条用户消息继续下一轮。需要
+`agent.continuation.register`。
+
+```ts
+ctx.agent.registerContinuationProvider({
+  id: "workflow-next-step",
+  timeoutMs: 3000,
+  context?: { conversation?: "summary" | "messages" }; // 大上下文 opt-in
+  async handler({ session, plugin, actions }) {
+    const task = findPendingTask(session.id);
+    if (!task) return null; // 允许 Agent 正常结束
+    return {
+      text: `继续处理工作流任务：${task.description}`,
+      idempotencyKey: task.id,
+    };
+  },
+});
+```
+
+- Todo continuation 优先；只有 Todo 不要求继续时才检查插件策略。
+- 多个策略按插件 id 和 provider id 稳定排序，每个停止点最多采用一个结果。
+- `idempotencyKey` 在会话内去重，避免同一任务被重复注入。
+- handler 默认 3 秒超时；异常、超时、空文本都按“无需继续”处理，不阻止 Agent 正常结束。
+- 单次 Agent run 最多接受 8 次插件 continuation，防止插件造成无限循环。
+- 返回的 `Disposable`、插件停用、重载或卸载都会注销该策略。
+
+## 命令执行 command
+
+`ctx.command.run` 在**宿主主进程**用 `execFile` 跑命令（**不走 shell**，参数数组传递，无注入）。需：
+
+1. 权限 `agent.command.run`
+2. `plugin.json` 的 `commands` 声明该二进制名
+3. 用户未在设置里关闭该命令
+
+```ts
+interface PluginCommandApi {
+  run(
+    file: string,
+    args?: string[],
+    options?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number | null }>;
+}
+```
+
+```ts
+const { stdout, exitCode } = await ctx.command.run("git", ["status", "--porcelain"], {
+  cwd: projectRoot,
+  timeoutMs: 30_000, // 宿主会 clamp（当前上限约 120s）
+});
+```
+
+- 未声明 / 用户关闭 / 无权限：拒绝（关闭时宿主会通知用户）。
+- 非零 exit：**resolve** 并带 `exitCode`，不 throw（spawn 失败才 reject）。
+- 粒度 = **可执行文件名**（`git` 的所有子命令共用一条声明）。见 ADR-0032、[manifest commands](./manifest.md#commands)。
+
+示例：`packages/plugins/presets/git`。
+
+## 文件 API
+
+`ctx.fs` 受权限门控读写文件（`fs.read` / `fs.write`，缺权限**抛错**）。
+
+```ts
+interface PluginFsApi {
+  readDir(dirPath): Promise<PluginFsEntry[]>;                 // fs.read
+  readFile(filePath): Promise<{ content: string; encoding: "utf8" | "base64" }>; // fs.read
+  writeFile(filePath, content: string, encoding?: "utf8" | "base64"): Promise<void>; // fs.write；base64 写二进制
+  stat(filePath): Promise<{ size; modifiedAt; createdAt } | null>; // fs.read
+  rename(oldPath, newPath): Promise<void>;                   // fs.write
+  delete(targetPath): Promise<void>;                         // fs.write
+  move(sourcePath, destDir): Promise<void>;                  // fs.write
+  createDirectory(dirPath): Promise<void>;                   // fs.write
+  listFilesRecursive(rootPath): Promise<{ name; path; relPath }[]>; // fs.read
+}
+// PluginFsEntry: { name, path, isDirectory, size, modifiedAt }
+```
+
+同一份 `fs` API 也通过工具 handler 的 `host.fs` 暴露给 agent 工具 handler。
+
+## 图像 API
+
+`ctx.images` 路由到宿主主进程图像服务（与 agent 内置图像工具**同一份实现**）。需要 `images.generate`。图像字节存 out-of-band，返回**引用**（`PluginImageRef { id, url, mimeType?, rootId? }`，`url` 是可直接作 `<img src>` 的宿主媒体 URL）。
+
+```ts
+interface PluginImagesApi {
+  generate(input: { prompt: string; size?: string; sessionId?: string }): Promise<PluginImageRef[]>;
+  edit(input: {
+    prompt: string;
+    source: { imageId: string } | { data: string; mimeType: string }; // 续 lineage 或上传字节
+    sessionId?: string;
+  }): Promise<PluginImageRef[]>;
+  lineage(imageId: string): Promise<PluginImageRef[]>;          // 该图的编辑谱系（旧→新）
+  sessionLineages(sessionId: string): Promise<PluginImageRef[][]>; // 会话所有谱系（新谱系在前；每谱系旧→新）
+}
+```
+
+配套：
+
+- `ctx.ui.setEditImageAttachment(ref | null)`：把某图绑为下一轮 prompt 的「编辑目标」，宿主在输入栏顶部渲染缩略图胶囊，发送时注入 `metadata.editImageId`（一次性）。需要 `ui.slot.input-action`。
+- `ctx.ui.previewImage(ref, group?)`：打开宿主全屏图片预览器（传 `group` 作图片组，带缩略图条与翻页）。
+- `useEditImageAttachment()` hook：响应式读当前编辑目标（「选中编辑」高亮的唯一真相源，发送 / 关闭胶囊 / 切会话时自动清）。
+
+## 设置 API
+
+`ctx.settings` 读插件**自身**在 `plugin.json` `contributes.settings` 声明、用户在设置页填写的值（按插件 id 命名空间）。**只读**，写入只能经宿主设置 UI。**不需要权限**。
+
+```ts
+interface PluginSettingsApi {
+  get<T = unknown>(key: string): T | undefined;
+  getAll(): Record<string, unknown>;
+  onChange(listener: (values: Record<string, unknown>) => void): Disposable;
+}
+```
+
+```ts
+const apiKey = ctx.settings.get<string>("apiKey");
+const sub = ctx.settings.onChange((values) => { /* 配置变更，重读 */ });
+```
+
+配置项的 schema（类型、`visibleWhen`、`secret` 等）见 [manifest.md](./manifest.md#contributessettings配置项)。引导用户去填配置用 `ctx.ui.openPluginSettings()`（跳到本插件的设置区）。
+
+## 插件 i18n
+
+与宿主语言同步（ADR-0033）。catalog 来自包内 `locales/<lang>.json`，**不需要权限**。
+
+```ts
+interface PluginI18nApi {
+  readonly locale: string;  // 宿主当前语言
+  t(key: string, params?: Record<string, string | number>): string; // 裸 key，支持 {{name}} 插值
+  onChange(listener: (locale: string) => void): Disposable;
+}
+```
+
+```tsx
+import { useTranslation } from "@vetta-org/plugin-sdk";
+
+function Panel() {
+  const { t, locale } = useTranslation(); // 切语言自动 rerender
+  return <button type="button">{t("panel.refresh")}</button>;
+}
+```
+
+- 宿主渲染的插件串用 **`%key%`**；组件内用 **裸 key** 调 `t()`。
+- fallback：当前 locale → `defaultLocale` → 裸 key。详见 [manifest i18n](./manifest.md#i18n)。

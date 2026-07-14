@@ -128,7 +128,7 @@ tab 顺序按卡片在消息里出现的顺序，默认激活第一个；tab 标
 组件是 `descriptor` 的纯函数——**不要**自己探测「是否在生成中」，由 `pending` 决定画 skeleton 还是内容：
 
 ```tsx
-import type { PluginCardProps } from "@vetta/plugin-sdk";
+import type { PluginCardProps } from "@vetta-org/plugin-sdk";
 
 function ImagePreviewCard({ descriptor, pending }: PluginCardProps) {
   const payload = (descriptor.payload ?? {}) as { images?: ImageRef[]; editingImageId?: string };
@@ -175,7 +175,14 @@ function ImagePreviewCard({ descriptor, pending }: PluginCardProps) {
 
 > 三条路径产出的描述符进入**同一个** `details.cards` 通道，由 host 按 `type` 查渲染器、按 `key` 去重、渲染在消息下方（≥2 张走收纳 UI）。`details.cards` 始终模型不可见。
 
+## 与 registerToolCallSlot
+
+- **消息卡片**（本节）：挂在**消息下方**，数据来自 `details.cards` / `cards` 提升。
+- **Tool-call 槽**（[ui-slots.md](./ui-slots.md#工具行内渲染-registertoolcallslot)）：按 `toolName` **替换工具调用行内**默认 UI。
+- 插件工具**可以**产卡片（返回 `cards`）；需要行内自定义 UI 时再用 `registerToolCallSlot`。两者可并用。
+
 ## 完整参考实现
 
 - `packages/plugins/presets/demo-map`：插件自注册工具返回 `cards` + `registerCardRenderer` 渲染——**插件全自包含**的端到端范例。
 - `packages/plugins/presets/image-gen`：`registerCardRenderer` + `pendingFor`，配合 coding-agent 内置 `generate_image` / `edit_image` 在 `details.cards` 产出描述符。
+- `packages/plugins/presets/git`：`registerTurnCard`（本轮变更，非 tool 绑定）——见 [ui-slots Turn 卡](./ui-slots.md#本轮-turn-卡-registerturncard)。

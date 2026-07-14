@@ -1,6 +1,58 @@
 # 样式与陷阱
 
-把这页当 checklist：以下几条都踩过坑，足以让插件「加载失败」「元素不可见」「改了不生效」。
+把这页当 checklist：以下几条都踩过坑，足以让插件「加载失败」「元素不可见」「改了不生效」「污染宿主 UI」。
+
+## 样式规则（强制）：只用 Tailwind，不要手写 CSS
+
+**插件 UI 样式只能用 Tailwind 工具类写在 JSX 的 `className` 上。禁止让 agent / 作者手写业务 CSS 规则。**
+
+原因：插件 CSS 经 `plugin.json` 的 `styles` 注入**宿主页面全局**，没有 Shadow DOM。一旦写 `button { … }`、`div { … }`、`* { … }` 或未隔离的选择器，会**污染整个 Vetta UI**。
+
+| 允许 | 禁止 |
+| --- | --- |
+| JSX：`className="flex h-8 gap-2 rounded-lg bg-background text-foreground"` | 手写 `.my-btn { padding: 8px }` 等业务样式表 |
+| `style.css` **仅**放 Tailwind 入口 import（见下） | `@import` 一整份 reset / preflight 进全局 |
+| 极少数无法用工具类表达时：用 **强前缀类名**（如 `.vetta-plugin-<id>-…`）且**绝不**选择全局元素 | `body` / `html` / `button` / `a` / `*` 等全局选择器 |
+
+主题色优先用 **宿主 CSS 变量**对应的 Tailwind 语义类（或 `var(--foreground)` 仅出现在不可避免的例外里）：`--foreground` / `--background` / `--border` / `--primary` / `--muted` 等。
+
+### style.css 只做 Tailwind 管道
+
+`src/style.css`（构建产物 `dist/style.css`）**不是**写业务样式的地方，只负责导入 Tailwind 层：
+
+```css
+/* 导入 theme + utilities。不要 preflight / base reset，避免 reset 污染宿主全局。 */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+```
+
+- **必须**带 `theme.css`：否则 `h-7`、`gap-1.5`、`rounded-lg` 等依赖设计令牌的类**生成不出来**（常见 0×0 不可见）。
+- **不要** `@import "tailwindcss"` 全量（常含 preflight，会污染宿主）。
+- Vite 配 `@tailwindcss/vite`；入口 `import "./style.css"` 一次即可。
+- `plugin.json`：`"styles": ["dist/style.css"]`。
+
+### JSX 示例
+
+```tsx
+// ✅ 仅 Tailwind className
+function Panel() {
+  return (
+    <div className="flex h-full flex-col gap-2 p-3 text-sm text-foreground">
+      <button type="button" className="rounded-md border border-border bg-accent px-2 py-1">
+        刷新
+      </button>
+    </div>
+  );
+}
+
+// ❌ 不要 import 自写业务 css
+// import "./panel-styles.css";
+```
+
+Agent 写插件时：若需要样式 → **只加/改 className**；不要新建 `.css` / 往 style.css 里堆选择器。
+
+---
 
 ## Module Federation 顶层 JSX 陷阱
 
@@ -26,40 +78,13 @@ function Icon() {
 
 - 你的插件与宿主用**同一个 React**，hook、context、状态都跨得过去（这正是 `useActiveConversation` 等能工作的前提）。
 - `package.json` 里的 `react` 只用于类型与本地构建，别试图 bundle 一份自己的 React。
-- `@vetta/plugin-sdk` 同样 external，运行时由宿主提供。
+- `@vetta-org/plugin-sdk` 同样 external，运行时由宿主提供。
 
 ## 缓存刷新
 
 插件 bundle 经 `vetta-plugin://` 协议加载，**Chromium 会缓存 `remoteEntry.js`**——你改了代码重装，**重启 App 也未必清掉旧缓存**，表现为「改动不生效」。
 
 可靠的强刷办法：**把 `plugin.json` 的 `version` 往上 bump**，宿主当作新版本重新拉取。配合在设置页 `reload(id)`（或重开 App）。调试期每次有效改动都建议 bump 一下 patch 版本。
-
-## 样式：用 CSS 变量、避免全局选择器
-
-插件应使用 Vetta 的 CSS 变量（自动适配明暗主题），并把样式**限定在自己的命名空间类名**下：
-
-```css
-.vetta-plugin-my-plugin {
-  color: var(--foreground);
-  background: var(--background);
-  border-color: var(--border);
-}
-```
-
-常用变量：`--foreground` / `--background` / `--border` / `--primary` / `--primary-foreground` / `--muted` / `--muted-foreground` / `--accent` / `--ring` 等。
-
-**不要**从插件 CSS 给 `body`、`button`、`*`、`a` 等全局选择器加样式——会污染整个宿主 UI。
-
-## Tailwind：必须导入 theme.css
-
-如果用 Tailwind（`@tailwindcss/vite`），插件的 `style.css` **必须导入 `tailwindcss/theme.css`**：
-
-```css
-@import "tailwindcss";
-/* 或至少 @import "tailwindcss/theme.css"; —— 缺了它 spacing/radius/blur 等设计令牌全无 */
-```
-
-否则 `h-7`、`w-7`、`rounded-lg`、`right-1.5`、`blur-md` 这类依赖设计令牌的工具类**生成不出来**，常见症状是按钮 `h-7 w-7` 实际渲染成 0×0、整个元素不可见。
 
 ## 清理副作用
 

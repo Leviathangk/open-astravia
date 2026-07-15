@@ -17,18 +17,21 @@
     "expose": "./plugin"
   },
   "styles": ["dist/style.css"],
-  "permissions": ["ui.slot.global", "agent.session.read"],
+  "permissions": ["ui.slot.global", "agent.session.read", "agent.command.run"],
+  "commands": ["git"],
+  "defaultLocale": "zh",
   "description": "一句话说明这个插件做什么",
   "author": "你的名字",
-  "guidingWords": ["帮我总结当前对话", "把这段代码加上注释"],
+  "guidingWords": ["%guidingWords.summarize%", "把这段代码加上注释"],
   "contributes": {
     "settings": [
-      { "key": "apiKey", "type": "secret", "title": "API Key", "description": "服务的密钥" }
+      { "key": "apiKey", "type": "secret", "title": "%settings.apiKey.title%", "description": "服务的密钥" }
     ]
   },
   "agent": {
     "systemPrompt": { "promptPaths": ["prompts/extra.md"] },
     "skillPaths": ["skills/"],
+    "mcpServers": "./.mcp.json",
     "toolPolicy": { "allow": [], "deny": [] }
   }
 }
@@ -39,28 +42,31 @@
 | 字段 | 必填 | 类型 | 说明 |
 | --- | --- | --- | --- |
 | `id` | ✅ | string | 全局唯一插件 id。决定安装目录、id 冲突时的去重，建议小写短横线。 |
-| `name` | ✅ | string | 展示名。 |
-| `version` | ✅ | string | 语义化版本。**bump 它可强制宿主重新拉取**绕过缓存（见下与 [styling-and-pitfalls.md](./styling-and-pitfalls.md)）。 |
+| `name` | ✅ | string | 展示名。可用 `%key%`（见 [i18n](#i18n)）。 |
+| `version` | ✅ | string | 语义化版本。**bump 它可强制宿主重新拉取**绕过缓存（见 [styling-and-pitfalls.md](./styling-and-pitfalls.md)）。 |
 | `pluginApiVersion` | ✅ | string | 兼容的 SDK API 版本范围（如 `^1.0.0`）。 |
 | `runtime` | ✅ | `"module-federation"` \| `"esm"` | 加载模式，见 [运行时](#运行时runtime)。 |
 | `entry` | ✅ | string | 入口路径。MF 模式指向 `dist/mf-manifest.json`。 |
 | `moduleFederation` | MF 必填 | `{ remoteName, expose }` | `remoteName` 与 vite 配置 `name` 一致；`expose` 与 vite `expose` 一致（默认 `./plugin`）。 |
 | `styles` | ❌ | string[] | 要注入的 CSS 文件路径（相对插件根）。 |
 | `permissions` | ❌ | string[] | 声明需要的权限，见 [permissions.md](./permissions.md)。未声明即不可用。 |
-| `description` | ❌ | string | 简介，展示在插件管理页。 |
+| `commands` | ❌ | string[] | 允许 `ctx.command.run` 的**可执行文件名**（如 `["git","node"]`），见 [commands](#commands)。 |
+| `description` | ❌ | string | 简介。可用 `%key%`。 |
 | `author` | ❌ | string | 作者。 |
-| `guidingWords` | ❌ | string[] | 新会话引导词，见 [下文](#guidingwords引导词)。 |
+| `defaultLocale` | ❌ | string | i18n 缺译回退 locale，默认 `"zh"`。见 [i18n](#i18n)。 |
+| `guidingWords` | ❌ | string[] | 新会话引导词，见 [下文](#guidingwords引导词)。条目可用 `%key%`。 |
 | `contributes.settings` | ❌ | object[] | 插件设置项 schema，见 [配置项](#contributessettings配置项)。 |
-| `agent` | ❌ | object | Agent 侧贡献（系统提示词片段 / skill / 工具策略），见 [Agent 清单](#agent-agent-侧贡献)。 |
+| `agent` | ❌ | object | Agent 侧贡献（prompt / skill / **MCP** / toolPolicy），见 [Agent 清单](#agent-agent-侧贡献)。 |
+| `contributionMode` | ❌ | object | 贡献硬隔离，见 [contributionMode](#contributionmode)。 |
 
 ## 运行时（runtime）
 
-- **`module-federation`（推荐）**：宿主用 `@module-federation/enhanced/runtime` 动态注册你的 remote 并加载 `expose`。`entry` 指向 `dist/mf-manifest.json`。React / React DOM / `@vetta/plugin-sdk` 由宿主作为共享单例提供。
-- **`esm`（兼容保留）**：旧加载模式，把 `react`、`react/jsx-runtime`、`react/jsx-dev-runtime`、`@vetta/plugin-sdk` 映射到 `vetta-host://` 模块。新插件用 MF。
+- **`module-federation`（推荐）**：宿主用 `@module-federation/enhanced/runtime` 动态注册你的 remote 并加载 `expose`。`entry` 指向 `dist/mf-manifest.json`。React / React DOM / `@vetta-org/plugin-sdk` 由宿主作为共享单例提供。
+- **`esm`（兼容保留）**：旧加载模式，把 `react`、`react/jsx-runtime`、`react/jsx-dev-runtime`、`@vetta-org/plugin-sdk` 映射到 `vetta-host://` 模块。新插件用 MF。
 
 ## 安装目录与版本机制
 
-已安装插件按版本存放：
+用户插件按版本存放：
 
 ```text
 ~/.vetta/plugins/<id>/versions/<version>/
@@ -68,7 +74,39 @@
 
 - 安装一个**更新版本**只被记录为 **pending**；App 持续加载当前 `activeVersion`。
 - 直到用户（或代码）触发 `window.vetta.plugins.reload(id)` 才切换到新版本 UI。
-- 因此调试时改了代码要 bump `version` + reload 才稳妥生效（缓存原因见 [styling-and-pitfalls.md](./styling-and-pitfalls.md#缓存刷新)）。
+- 调试时改了代码要 bump `version` + reload 才稳妥生效（见 [styling-and-pitfalls.md](./styling-and-pitfalls.md#缓存刷新)）。
+- `listPlugins()` 会给出 **`rootPath`**：活动版本包在磁盘上的绝对根（用户插件 = 上表版本目录；系统插件 = `system-plugins/<id>`）。脚本、MCP 相对路径均相对此根解析。
+
+系统插件不进 `~/.vetta/plugins`，见 [system-plugins.md](./system-plugins.md)。
+
+## commands
+
+`commands?: string[]`：**可执行文件名**粒度（如 `"git"`、`"node"`、`"npm"`），不是完整 argv。
+
+- 未列入的二进制：`ctx.command.run` **硬拒绝**。
+- 已声明：用户可在插件设置里**逐条开关**；关闭后调用拦截并提示用户。
+- 需权限 `agent.command.run`。语义与 API 见 [conversation-and-agent.md 命令执行](./conversation-and-agent.md#命令执行-command)（ADR-0032）。
+
+## contributionMode
+
+```json
+"contributionMode": { "hardIsolation": true }
+```
+
+- `hardIsolation: true`：该插件的 agent 贡献（tools / skills / MCP / systemPrompt）在 **mode 未打开**时不进入会话（冷启动即 gate，不必等 UI activate）。
+- 通常配合 `registerInputAction({ hardIsolation: true })` 作为用户开关（ADR-0041）。
+- **用户自建插件默认不要开**；模式型系统插件（如插件工作台）使用。
+
+## i18n
+
+插件 i18n（ADR-0033）：
+
+1. 包内 **`locales/<lang>.json`**：扁平 `key → 译文`（如 `zh.json` / `en.json`）。宿主 main 加载，随 `InstalledPlugin` 下发。
+2. **`defaultLocale`**：缺译回退链 = 当前宿主语言 → defaultLocale → 裸 key。省略默认 `"zh"`。
+3. **宿主渲染的字符串**（`name` / `description` / settings 文案 / `register*` 的 `label` / guidingWords 等）：值为 **`%catalogKey%`** 时查 catalog；其它字符串当字面量（向后兼容）。
+4. **插件自己的 React 组件内文案**：用 `useTranslation().t("catalogKey")` 或 `ctx.i18n.t`（裸 key，无 `%`），见 [conversation-and-agent 插件 i18n](./conversation-and-agent.md#插件-i18n)。
+
+打包时 `locales/` 会打进 zip。
 
 ## guidingWords（引导词）
 
@@ -87,9 +125,9 @@
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `key` | string | 设置键（`ctx.settings.get(key)` 用它读）。`desc` 类型可省。 |
-| `type` | `"string"` \| `"secret"` \| `"enum"` \| `"desc"` | 控件类型。 |
-| `title` | string | 标签。`desc` 类型可选。 |
-| `description` | string | 说明文本。`desc` 类型里其中的 http(s) 链接会渲染成可点外链。 |
+| `type` | `"string"` \| `"number"` \| `"boolean"` \| `"secret"` \| `"enum"` \| `"desc"` | 控件类型。 |
+| `title` | string | 标签。`desc` 类型可选。可用 `%key%`。 |
+| `description` | string | 说明文本。`desc` 类型里 http(s) 链接会渲染成可点外链。可用 `%key%`。 |
 | `default` | any | 默认值。 |
 | `enum` | string[] | `type:"enum"` 的可选值。 |
 | `visibleWhen` | `{ key, in }` | 按**另一个设置项**的当前值决定本项是否显示（`in` 是允许值数组）。 |
@@ -130,11 +168,11 @@
 
 | 字段 | 说明 |
 | --- | --- |
-| `agent.systemPrompt.promptPaths` | 追加进系统提示词的提示片段文件路径。 |
-| `agent.skillPaths` | 加入 agent 资源图的 skill 文件 / 目录。 |
-| `agent.mcpServers` | 插件内聚 MCP：相对路径指向 `.mcp.json`，或内联 `{ "server-name": { command, args, cwd? } \| { type:"http", url } }`。需权限 `agent.mcp.control`。见 [mcp.md](./mcp.md)。 |
-| `agent.toolPolicy.allow` / `.deny` | 声明式工具可见性策略（名字是工具注册后的 id）。 |
+| `agent.systemPrompt.promptPaths` | 追加进系统提示词的提示片段文件路径。需 `agent.systemPrompt.write`（或 fullControl）。 |
+| `agent.skillPaths` | 加入 agent 资源图的 skill 文件 / 目录。需 `agent.skills.control`。 |
+| `agent.mcpServers` | **插件内聚 MCP**（三源聚合之插件源）：相对路径 `.mcp.json` 或内联 map。需 `agent.mcp.control`。见 [mcp.md](./mcp.md)。 |
+| `agent.toolPolicy.allow` / `.deny` | 声明式工具可见性策略（注册后的工具 id）。需 `agent.tools.control`。 |
 
 > 在 JS 里**动态**注册 agent 工具走 `ctx.agent.registerTool`（见 [conversation-and-agent.md](./conversation-and-agent.md#注册-agent-工具)），与此处的**声明式**清单字段是两条不同路径。
 >
-> **插件 MCP** 是第三配置源：不写入用户 `~/.vetta/agent/mcp.json`；启用+授权后进会话 `McpManager`，禁用/卸载即拆掉（ADR-0040）。
+> **插件 MCP** 与用户全局 / 项目 MCP **聚合**进同一会话，不写用户 mcp.json；启停与授权见 [mcp.md](./mcp.md)（ADR-0040）。

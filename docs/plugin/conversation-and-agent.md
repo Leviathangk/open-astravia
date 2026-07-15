@@ -1,4 +1,4 @@
-# 对话 / Agent 工具 / 文件 / 图像 / 设置 API
+# 对话 / Agent / 命令 / 文件 / 图像 / 设置 / i18n API
 
 `ctx` 上除 UI 注册外的能力出口，以及配套 React hook。
 
@@ -9,20 +9,24 @@ interface PluginContext {
   ui: PluginUiApi;            // 见 ui-slots.md / message-cards.md
   conversation: PluginConversationApi;
   agent: PluginAgentApi;
+  command: PluginCommandApi;  // 见「命令执行」
   fs: PluginFsApi;
   images: PluginImagesApi;
   settings: PluginSettingsApi;
+  i18n: PluginI18nApi;        // 见「插件 i18n」
 }
 ```
+
+> **MCP 不在 `ctx` 上**：插件内聚 MCP 是 **清单声明式**（`agent.mcpServers`），由宿主聚合进会话，见 [mcp.md](./mcp.md)。
 
 所有对话 API 都作用于**当前活动会话**（桌面同时只展示一个）；插件不能枚举或持有任意会话句柄。
 
 ## 对话：读状态
 
-hook 直接从 `@vetta/plugin-sdk` import、在组件里调用，读当前活动对话并自动 rerender。需要 `agent.session.read`。
+hook 直接从 `@vetta-org/plugin-sdk` import、在组件里调用，读当前活动对话并自动 rerender。需要 `agent.session.read`。
 
 ```tsx
-import { useActiveConversation, useConversationMessages } from "@vetta/plugin-sdk";
+import { useActiveConversation, useConversationMessages } from "@vetta-org/plugin-sdk";
 
 function Sidebar() {
   const convo = useActiveConversation();
@@ -232,6 +236,37 @@ ctx.agent.registerContinuationProvider({
 - 单次 Agent run 最多接受 8 次插件 continuation，防止插件造成无限循环。
 - 返回的 `Disposable`、插件停用、重载或卸载都会注销该策略。
 
+## 命令执行 command
+
+`ctx.command.run` 在**宿主主进程**用 `execFile` 跑命令（**不走 shell**，参数数组传递，无注入）。需：
+
+1. 权限 `agent.command.run`
+2. `plugin.json` 的 `commands` 声明该二进制名
+3. 用户未在设置里关闭该命令
+
+```ts
+interface PluginCommandApi {
+  run(
+    file: string,
+    args?: string[],
+    options?: { cwd?: string; env?: Record<string, string>; timeoutMs?: number },
+  ): Promise<{ stdout: string; stderr: string; exitCode: number | null }>;
+}
+```
+
+```ts
+const { stdout, exitCode } = await ctx.command.run("git", ["status", "--porcelain"], {
+  cwd: projectRoot,
+  timeoutMs: 30_000, // 宿主会 clamp（当前上限约 120s）
+});
+```
+
+- 未声明 / 用户关闭 / 无权限：拒绝（关闭时宿主会通知用户）。
+- 非零 exit：**resolve** 并带 `exitCode`，不 throw（spawn 失败才 reject）。
+- 粒度 = **可执行文件名**（`git` 的所有子命令共用一条声明）。见 ADR-0032、[manifest commands](./manifest.md#commands)。
+
+示例：`packages/plugins/presets/git`。
+
 ## 文件 API
 
 `ctx.fs` 受权限门控读写文件（`fs.read` / `fs.write`，缺权限**抛错**）。
@@ -240,7 +275,7 @@ ctx.agent.registerContinuationProvider({
 interface PluginFsApi {
   readDir(dirPath): Promise<PluginFsEntry[]>;                 // fs.read
   readFile(filePath): Promise<{ content: string; encoding: "utf8" | "base64" }>; // fs.read
-  writeFile(filePath, content: string): Promise<void>;       // fs.write
+  writeFile(filePath, content: string, encoding?: "utf8" | "base64"): Promise<void>; // fs.write；base64 写二进制
   stat(filePath): Promise<{ size; modifiedAt; createdAt } | null>; // fs.read
   rename(oldPath, newPath): Promise<void>;                   // fs.write
   delete(targetPath): Promise<void>;                         // fs.write
@@ -294,3 +329,27 @@ const sub = ctx.settings.onChange((values) => { /* 配置变更，重读 */ });
 ```
 
 配置项的 schema（类型、`visibleWhen`、`secret` 等）见 [manifest.md](./manifest.md#contributessettings配置项)。引导用户去填配置用 `ctx.ui.openPluginSettings()`（跳到本插件的设置区）。
+
+## 插件 i18n
+
+与宿主语言同步（ADR-0033）。catalog 来自包内 `locales/<lang>.json`，**不需要权限**。
+
+```ts
+interface PluginI18nApi {
+  readonly locale: string;  // 宿主当前语言
+  t(key: string, params?: Record<string, string | number>): string; // 裸 key，支持 {{name}} 插值
+  onChange(listener: (locale: string) => void): Disposable;
+}
+```
+
+```tsx
+import { useTranslation } from "@vetta-org/plugin-sdk";
+
+function Panel() {
+  const { t, locale } = useTranslation(); // 切语言自动 rerender
+  return <button type="button">{t("panel.refresh")}</button>;
+}
+```
+
+- 宿主渲染的插件串用 **`%key%`**；组件内用 **裸 key** 调 `t()`。
+- fallback：当前 locale → `defaultLocale` → 裸 key。详见 [manifest i18n](./manifest.md#i18n)。

@@ -1,0 +1,34 @@
+{
+	"name": "@vetta/runtime-composition",
+	"version": "0.0.1",
+	"type": "module",
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": ["dist"],
+	"scripts": {
+		"clean": "rm -rf dist",
+		"build": "tsgo -p tsconfig.build.json && node scripts/verify-artifact.mjs",
+		"test": "bunx vitest --run",
+		"verify:artifact": "node scripts/verify-artifact.mjs"
+	},
+	"dependencies": {
+		"@vetta/ai": "workspace:*",
+		"@vetta/coding-agent": "workspace:*",
+		"@vetta/runtime-core": "workspace:*",
+		"@vetta/runtime-mcp": "workspace:*",
+		"@vetta/runtime-storage": "workspace:*",
+		"@vetta/runtime-subagents": "workspace:*",
+		"@vetta/runtime-tools": "workspace:*",
+		"zod": "^4.4.3"
+	},
+	"devDependencies": {
+		"@types/node": "^22.10.5",
+		"typescript": "^5.9.2"
+	}
+}

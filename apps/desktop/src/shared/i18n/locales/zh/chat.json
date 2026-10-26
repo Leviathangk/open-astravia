@@ -943,7 +943,11 @@
 		"tokens": "已压缩 {{tokens}} tokens",
 		"compacting": "正在压缩…",
 		"viewSummary": "查看摘要",
-		"hideSummary": "收起摘要"
+		"hideSummary": "收起摘要",
+		"rowRenderFailed": {
+			"title": "这条消息没能显示",
+			"detail": "内容还在会话记录里，没有丢失。这一行再次出现时会重新渲染。"
+		}
 	},
 	"modelSelector": {
 		"defaultBadge": "默认",

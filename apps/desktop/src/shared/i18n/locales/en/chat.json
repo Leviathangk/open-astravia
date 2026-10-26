@@ -943,7 +943,11 @@
 		"tokens": "Compacted {{tokens}} tokens",
 		"compacting": "Compacting…",
 		"viewSummary": "View summary",
-		"hideSummary": "Hide summary"
+		"hideSummary": "Hide summary",
+		"rowRenderFailed": {
+			"title": "This message could not be displayed",
+			"detail": "Its content is still in the conversation and is not lost. Rendering is retried the next time the row appears."
+		}
 	},
 	"modelSelector": {
 		"defaultBadge": "Default",

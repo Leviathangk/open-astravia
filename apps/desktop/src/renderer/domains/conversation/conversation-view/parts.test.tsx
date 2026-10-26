@@ -6,7 +6,7 @@ import { createConversationAgentMessage, createConversationUserMessage } from "@
 import type { ChatConversationItem } from "@shared/store/chat-atoms";
 import userEvent from "@testing-library/user-event";
 import { atom } from "jotai";
-import { type ComponentProps, Fragment, type ReactNode, useEffect } from "react";
+import { Component, type ComponentProps, Fragment, type ReactNode, useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MessageListModel } from "../components/message-list/types";
 import { ConversationExtensionRegistry } from "./extensions";
@@ -60,7 +60,12 @@ const captured = vi.hoisted(() => ({
 	messageItemProps: [] as Array<Record<string, unknown>>,
 	virtualListMounts: 0,
 	virtualListUnmounts: 0,
+	/** 会抛错的消息 id；默认空集合，既有用例行为不变。 */
+	throwFor: new Set<string>(),
 }));
+
+/** 只在测试里存在的根级错误边界：用来证明单行崩溃没有冒到页面层。 */
+const rootFallback = { failed: false };
 
 vi.mock("react-i18next", () => ({
 	useTranslation: () => ({ t: (key: string) => key }),
@@ -144,6 +149,7 @@ vi.mock("./defaults", async () => {
 		const row = useMessageRow();
 		const sessionUsages = useContext(ConversationUsagesContext);
 		captured.messageItemProps.push({ ...row, sessionUsages });
+		if (captured.throwFor.has(row.message.id)) throw new Error("markdown render exploded");
 		return <div data-testid="full-message">{row.message.id}</div>;
 	}
 	return { DefaultUserMessage: Row, DefaultAgentMessage: Row, DefaultEventMessage: Row };
@@ -188,14 +194,36 @@ function props(
 	};
 }
 
+/** 每个用例都从“无抛错消息、根边界未触发”的状态开始。 */
+function resetCaptured(): void {
+	cleanup();
+	captured.virtuosoProps = undefined;
+	captured.messageItemProps = [];
+	captured.virtualListMounts = 0;
+	captured.virtualListUnmounts = 0;
+	captured.throwFor.clear();
+	rootFallback.failed = false;
+}
+
+/**
+ * 测试专用的根级边界：真实桌面应用里这里是 React Router 的 route errorElement，
+ * 一旦被触发整页对话就被错误页替掉。
+ */
+class RootFallbackProbe extends Component<{ children: ReactNode }, { failed: boolean }> {
+	state = { failed: false };
+
+	static getDerivedStateFromError(): { failed: boolean } {
+		rootFallback.failed = true;
+		return { failed: true };
+	}
+
+	render(): ReactNode {
+		return this.state.failed ? <div data-testid="root-fallback">page failed</div> : this.props.children;
+	}
+}
+
 describe("MessageListView virtualization", () => {
-	beforeEach(() => {
-		cleanup();
-		captured.virtuosoProps = undefined;
-		captured.messageItemProps = [];
-		captured.virtualListMounts = 0;
-		captured.virtualListUnmounts = 0;
-	});
+	beforeEach(resetCaptured);
 
 	it("非关键内容就绪不会在滚动期间改写虚拟列表布局参数", () => {
 		const initial = props(false);
@@ -419,6 +447,90 @@ describe("MessageListView virtualization", () => {
 		expect(captured.messageItemProps).toHaveLength(2);
 		expect(captured.messageItemProps[0].sessionUsages).toEqual([firstUsage, secondUsage]);
 		expect(captured.messageItemProps[1].sessionUsages).toEqual([firstUsage, secondUsage]);
+	});
+});
+
+describe("MessageListView row isolation", () => {
+	beforeEach(resetCaptured);
+
+	function twoMessages(): ComponentProps<typeof MessageListView> {
+		const viewProps = props(true);
+		viewProps.model.messages = [
+			createConversationAgentMessage({ id: "message-ok", text: "still visible", blocks: [] }),
+			createConversationAgentMessage({ id: "message-boom", text: "explodes", blocks: [] }),
+		];
+		return viewProps;
+	}
+
+	/** React 自己也会把捕获到的错误打一遍 console.error，这里静音并留出断言入口。 */
+	function muteConsoleError(): ReturnType<typeof vi.spyOn> {
+		return vi.spyOn(console, "error").mockImplementation(() => undefined);
+	}
+
+	it("单条消息渲染崩溃只降级该行，不换掉整页", () => {
+		const error = muteConsoleError();
+		captured.throwFor.add("message-boom");
+
+		render(
+			<RootFallbackProbe>
+				<MessageListView {...twoMessages()} />
+			</RootFallbackProbe>,
+		);
+
+		const brokenRow = document.querySelector('[data-entry-id="message-boom"]');
+		expect(brokenRow).not.toBeNull();
+		expect(brokenRow?.querySelector("[data-message-render-failed]")).not.toBeNull();
+		expect(brokenRow?.textContent).toContain("messageList.rowRenderFailed.title");
+		// 同一列表的其余消息照常渲染。
+		expect(screen.getAllByTestId("full-message").map((node) => node.textContent)).toEqual(["message-ok"]);
+		// 页面级 fallback 没有被触发。
+		expect(rootFallback.failed).toBe(false);
+		expect(screen.queryByTestId("root-fallback")).toBeNull();
+		// 失败留了日志，能被 renderer 日志链路带走。
+		const logged = error.mock.calls.find((call) => call[0] === "Message row failed to render");
+		expect(logged).toBeDefined();
+		expect(String(logged?.[2])).toContain("at ");
+
+		error.mockRestore();
+	});
+
+	it("该行重新挂载后自动重试渲染", () => {
+		const error = muteConsoleError();
+		captured.throwFor.add("message-boom");
+		const viewProps = twoMessages();
+		const { unmount } = render(<MessageListView {...viewProps} />);
+		expect(document.querySelector('[data-entry-id="message-boom"] [data-message-render-failed]')).not.toBeNull();
+
+		unmount();
+		captured.throwFor.delete("message-boom");
+		render(<MessageListView {...viewProps} />);
+
+		expect(document.querySelector('[data-entry-id="message-boom"] [data-message-render-failed]')).toBeNull();
+		expect(screen.getAllByTestId("full-message").map((node) => node.textContent)).toEqual([
+			"message-ok",
+			"message-boom",
+		]);
+
+		error.mockRestore();
+	});
+
+	it("同一行被复用给另一条消息时重新尝试渲染", () => {
+		const error = muteConsoleError();
+		captured.throwFor.add("message-a");
+		const viewProps = props(true);
+		const row = (id: string): ReturnType<typeof createConversationAgentMessage> =>
+			createConversationAgentMessage({ id, text: id, blocks: [], renderKey: "shared-row" });
+		viewProps.model.messages = [row("message-a")];
+		const { rerender } = render(<MessageListView {...viewProps} />);
+		expect(document.querySelector('[data-entry-id="message-a"] [data-message-render-failed]')).not.toBeNull();
+
+		// renderKey 相同意味着 React 复用同一个行实例；id 变了就不再是原来那条消息。
+		rerender(<MessageListView {...viewProps} model={{ ...viewProps.model, messages: [row("message-b")] }} />);
+
+		expect(document.querySelector('[data-entry-id="message-b"] [data-message-render-failed]')).toBeNull();
+		expect(screen.getAllByTestId("full-message").map((node) => node.textContent)).toEqual(["message-b"]);
+
+		error.mockRestore();
 	});
 });
 

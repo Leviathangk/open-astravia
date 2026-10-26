@@ -22,14 +22,20 @@ export interface CompactionStepViewProps {
 	 * 主题包不持有语言，由宿主传入已翻译的文案。
 	 */
 	readonly pendingHint?: ReactNode;
+	/**
+	 * 宿主持有的展开态。传入时它是面板开合的唯一事实源：组件内不再保留能覆盖它的状态，
+	 * 点击只通知宿主。running 期间默认展开由宿主提供（桌面端是
+	 * `useExpansion(key, status === "running")`），展开态才能跨列表卸载重挂存活。
+	 * 不传时退回组件内的选择，语义相同但不跨重挂。
+	 */
 	readonly expanded?: boolean;
 	readonly onToggle?: () => void;
 	readonly exportMode?: boolean;
 }
 
 const STATUS_ICON: Record<CompactionStepViewProps["status"], string> = {
-	running: "icon-[mdi--compress] animate-pulse text-primary/80",
-	success: "icon-[mdi--compress] text-primary",
+	running: "icon-[mdi--compress] animate-pulse text-sky-500/80 dark:text-sky-400/80",
+	success: "icon-[mdi--compress] text-sky-500 dark:text-sky-400",
 	error: "icon-[solar--danger-circle-linear] text-destructive/70",
 	skipped: "icon-[mdi--skip-next-circle-outline] text-muted-foreground/60",
 };
@@ -38,9 +44,9 @@ const STATUS_ICON: Record<CompactionStepViewProps["status"], string> = {
  * Automatic context compaction as a step of the reply: same row rhythm as a
  * tool step, set apart by its icon and accent so it never reads as agent work.
  *
- * During streaming (status === "running"), the summary panel auto-expands so
- * the user can follow the summary being generated in real time at the bottom
- * of the conversation.
+ * While streaming (status === "running") the summary panel starts expanded so
+ * the user can follow the summary being generated in real time; collapsing it
+ * is then honoured, including while further summary deltas keep arriving.
  */
 export function CompactionStepView({
 	status,
@@ -53,8 +59,9 @@ export function CompactionStepView({
 	renderSummary,
 	pendingHint,
 }: CompactionStepViewProps): JSX.Element {
-	const [uncontrolled, setUncontrolled] = useState(false);
-	const expanded = expandedProp ?? uncontrolled;
+	// 非受控模式的展开态；null 表示用户还没点过，此时按状态取默认值。
+	// 用户的选择必须记住：压缩期间每来一段摘要增量都会重渲染，回退成默认值就会把它顶开。
+	const [chosen, setChosen] = useState<boolean | null>(null);
 	const generatedId = useId();
 	const panelId = exportMode ? `export-compaction-step-${generatedId}` : undefined;
 	const hasSummary = Boolean(summary?.trim());
@@ -70,9 +77,14 @@ export function CompactionStepView({
 		followTailRef.current =
 			element.scrollHeight - element.clientHeight - element.scrollTop <= SUMMARY_TAIL_THRESHOLD_PX;
 	};
-	// Auto-expand while streaming so the user can follow the summary in real time.
-	const autoExpand = status === "running";
-	const open = hasContent && (autoExpand || expanded || exportMode);
+	// 受控时宿主是唯一事实源：组件内若再记一份用户选择，程序化收起（全局折叠、切会话）
+	// 会被这份旧选择压住，Virtuoso 卸载重挂又会把它丢掉，表现成「收起后滚出去再滚回来
+	// 又展开了」。非受控时 running 只提供默认值——旧实现把它并进 open，压缩期间这一行
+	// 永远收不起来，点标题改到的只是一个随后被覆盖的受控值。
+	const controlled = expandedProp !== undefined;
+	const defaultExpanded = status === "running";
+	const expanded = expandedProp ?? chosen ?? defaultExpanded;
+	const open = hasContent && (expanded || exportMode);
 
 	useEffect(() => {
 		if (status !== "running") return;
@@ -91,8 +103,13 @@ export function CompactionStepView({
 				disabled={!hasContent}
 				aria-expanded={open}
 				data-export-toggle={hasContent ? panelId : undefined}
-				onClick={() => (onToggle ? onToggle() : setUncontrolled((value) => !value))}
-				className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors enabled:hover:bg-primary/10"
+				onClick={() => {
+					// 受控时翻转由宿主完成；非受控时取反当前实际显示的状态，
+					// running 的默认展开不在任何布尔里，取反不了。
+					onToggle?.();
+					if (!controlled) setChosen(!open);
+				}}
+				className="inline-flex max-w-full min-w-0 items-center gap-1.5 rounded-lg px-1.5 py-1 text-left transition-colors enabled:hover:bg-sky-500/10"
 			>
 				<span className={`h-3.5 w-3.5 shrink-0 ${STATUS_ICON[status]}`} aria-hidden="true" />
 				<span
@@ -103,7 +120,7 @@ export function CompactionStepView({
 								? "text-destructive/80"
 								: status === "skipped"
 									? "text-muted-foreground/70"
-									: "text-primary"
+									: "text-sky-600/90 dark:text-sky-300/85"
 					}`}
 				>
 					{label}
@@ -120,7 +137,7 @@ export function CompactionStepView({
 			</button>
 			{hasContent ? (
 				<CollapsePanel open={open} id={panelId} exportPanel={exportMode} hidden={exportMode && !expanded}>
-					<div className="ml-4 border-primary/25 border-l pb-1 pl-3">
+					<div className="ml-4 border-sky-500/25 border-l pb-1 pl-3">
 						<div
 							ref={exportMode ? undefined : summaryRef}
 							onScroll={(event) => onSummaryScroll(event.currentTarget)}
@@ -132,8 +149,8 @@ export function CompactionStepView({
 									pendingHint
 								) : null
 							) : renderSummary ? (
-								// `streaming`：这段文本还在增长。增长中的正文必须走宿主的流式渲染管线，
-								// 否则每次增量都要把整篇重解析一遍、整棵 Markdown 树重建一次。
+								// `streaming`：这段文本还在增长。增长期每次增量都整篇重解析会随长度线性变贵，
+								// 所以宿主可以在这段时间只输出纯文本、结束后再解析一次（桌面端就是这么做的）。
 								// 导出快照要的是完整正文，流式渲染只会给出已放出的那一段，所以这里排除导出。
 								renderSummary(summary, status === "running" && !exportMode)
 							) : (

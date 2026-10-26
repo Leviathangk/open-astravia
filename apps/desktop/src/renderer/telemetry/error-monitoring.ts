@@ -84,12 +84,25 @@ export function captureReactError(error: unknown, errorInfo: ErrorInfo): void {
  * 把 React 捕获到的错误连同组件栈写进 console —— 渲染进程 console 由主进程落盘到
  * `desktop-app/logs/render/*.log`。生产构建的 React 只给编号（#185 之类），组件栈是唯一能
  * 指出「哪个组件在循环」的信息，不能只送给默认关闭的 Sentry。
+ *
+ * 组件栈只说「谁在树里」，说不了「谁在改状态」。#185 是在 `getRootForUpdatedFiber`
+ * （dev 构建里叫 checkForNestedUpdates）里抛的，而它只能从 dispatchSetState →
+ * enqueueConcurrentHookUpdate 这条同步路径达到，所以 JS 栈里 dispatchSetState 上面那帧
+ * 就是发起更新的调用点。两段用途不同，分开放。
  */
 function logReactError(error: unknown, componentStack: string | null | undefined): void {
 	try {
 		const reason = error instanceof Error ? error.message : String(error);
 		const stack = componentStack?.trim();
-		console.error("[react error]", reason, stack ? `\ncomponent stack:${stack}` : "");
+		// 非 Error 值不造伪栈：拼接 String(error) 只会伪造一个不存在的调用点。
+		const jsStack = error instanceof Error ? error.stack?.trim() : undefined;
+		console.error(
+			"[react error]",
+			reason,
+			stack ? `\ncomponent stack:${stack}` : "",
+			// 栈被压缩/裁空时不输出空段，避免在日志里制造噪音。
+			...(jsStack ? [`\njs stack:${jsStack}`] : []),
+		);
 	} catch {
 		// Logging must never change the error path.
 	}

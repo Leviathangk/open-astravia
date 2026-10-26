@@ -1,6 +1,53 @@
+// @vitest-environment jsdom
+import { act, useState, type ReactElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { CompactionStepView } from "./CompactionStepView";
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+let root: Root | null = null;
+
+/** 点击类断言要真实交互，所以这部分跑在 jsdom 里（静态标记用例同样成立）。 */
+function mount(ui: ReactElement): HTMLElement {
+	const container = document.createElement("div");
+	document.body.append(container);
+	root = createRoot(container);
+	act(() => {
+		root?.render(ui);
+	});
+	return container;
+}
+
+function rerender(ui: ReactElement): void {
+	act(() => {
+		root?.render(ui);
+	});
+}
+
+/** `aria-expanded` 是面板开合的唯一对外信号，不受折叠动画时序影响。 */
+function isExpanded(container: HTMLElement): boolean {
+	const button = container.querySelector("button");
+	if (!button) throw new Error("compaction header is missing");
+	return button.getAttribute("aria-expanded") === "true";
+}
+
+function clickHeader(container: HTMLElement): void {
+	const button = container.querySelector("button");
+	if (!button) throw new Error("compaction header is missing");
+	act(() => {
+		button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+	});
+}
+
+afterEach(() => {
+	act(() => {
+		root?.unmount();
+	});
+	root = null;
+	document.body.innerHTML = "";
+});
 
 describe("CompactionStepView", () => {
 	it("shows the summary that replaced earlier context once opened", () => {
@@ -123,5 +170,153 @@ describe("CompactionStepView", () => {
 		);
 
 		expect(seen).toEqual([true, false, false]);
+	});
+});
+
+describe("CompactionStepView collapse control", () => {
+	it("collapses while running when the header is clicked, then expands again", () => {
+		const view = mount(<CompactionStepView status="running" label="Compacting context…" summary="partial" />);
+		expect(isExpanded(view)).toBe(true);
+
+		clickHeader(view);
+		expect(isExpanded(view)).toBe(false);
+
+		clickHeader(view);
+		expect(isExpanded(view)).toBe(true);
+	});
+
+	it("keeps the reader's choice when a new summary delta arrives", () => {
+		const view = mount(<CompactionStepView status="running" label="Compacting context…" summary="partial" />);
+		clickHeader(view);
+
+		rerender(<CompactionStepView status="running" label="Compacting context…" summary="partial and then some more" />);
+
+		expect(isExpanded(view)).toBe(false);
+	});
+
+	it("collapses on the first click when the host supplies a running-aware default", () => {
+		// 桌面端 CompactionBlock 用 useExpansion(key, status === "running") 持有展开态：
+		// running 的默认展开由宿主提供，受控时宿主就是唯一事实源。
+		function HostRow(): ReactElement {
+			// `stored` 模拟 store：null 表示用户还没写过，此时取 running 的默认值 true。
+			const [stored, setStored] = useState<boolean | null>(null);
+			const hostExpanded = stored ?? true;
+			return (
+				<CompactionStepView
+					status="running"
+					label="Compacting context…"
+					summary="partial"
+					expanded={hostExpanded}
+					onToggle={() => setStored(!hostExpanded)}
+				/>
+			);
+		}
+
+		const view = mount(<HostRow />);
+		expect(isExpanded(view)).toBe(true);
+
+		clickHeader(view);
+		expect(isExpanded(view)).toBe(false);
+
+		clickHeader(view);
+		expect(isExpanded(view)).toBe(true);
+	});
+
+	it("follows the host when it collapses the row programmatically", () => {
+		// 受控时显示态不能有组件内阴影态：宿主程序化收起（全局折叠、切会话重置）必须生效。
+		const probes: Array<(value: boolean) => void> = [];
+		function HostRow(): ReactElement {
+			const [stored, setStored] = useState<boolean>(true);
+			probes.push(setStored);
+			return (
+				<CompactionStepView
+					status="running"
+					label="Compacting context…"
+					summary="partial"
+					expanded={stored}
+					onToggle={() => setStored((value) => !value)}
+				/>
+			);
+		}
+
+		const view = mount(<HostRow />);
+		expect(isExpanded(view)).toBe(true);
+
+		// 先点两次（收起再展开），制造「组件内已经有过选择」的条件。
+		clickHeader(view);
+		clickHeader(view);
+		expect(isExpanded(view)).toBe(true);
+
+		act(() => {
+			probes[probes.length - 1]?.(false);
+		});
+		expect(isExpanded(view)).toBe(false);
+	});
+
+	it("stays collapsed after a remount when the host remembers the choice", () => {
+		// Virtuoso 会把条目卸载重挂：宿主 store 记住的选择必须跨重挂存活。
+		// 这个 fake store 就是桌面端 useExpansion(key, status === "running") 的最小等价物。
+		const store: { value: boolean | null } = { value: null };
+
+		function HostRow(): ReactElement {
+			const [, forceRender] = useState(0);
+			const hostExpanded = store.value ?? true;
+			return (
+				<CompactionStepView
+					status="running"
+					label="Compacting context…"
+					summary="partial"
+					expanded={hostExpanded}
+					onToggle={() => {
+						store.value = !hostExpanded;
+						forceRender((value) => value + 1);
+					}}
+				/>
+			);
+		}
+
+		const view = mount(<HostRow />);
+		expect(isExpanded(view)).toBe(true);
+		clickHeader(view);
+		expect(isExpanded(view)).toBe(false);
+		expect(store.value).toBe(false);
+
+		// 卸载重挂：store 里的 false 仍然生效，不会回弹成展开。
+		act(() => {
+			root?.unmount();
+		});
+		root = null;
+		document.body.innerHTML = "";
+
+		const remounted = mount(<HostRow />);
+		expect(isExpanded(remounted)).toBe(false);
+	});
+
+	it("collapses once compaction finishes while it was open", () => {
+		const view = mount(<CompactionStepView status="running" label="Compacting context…" summary="partial" />);
+		expect(isExpanded(view)).toBe(true);
+
+		rerender(<CompactionStepView status="success" label="Context compacted" summary="partial and then some more" />);
+
+		expect(isExpanded(view)).toBe(false);
+	});
+
+	it("accents the row with a theme-independent colour so mono themes stay visible", () => {
+		// mono 主题把 --primary 定义成纯黑/纯白，强调色走 primary 就退化成黑白图标与标题；
+		// 所以这里锁的是「不能再用 primary 派生色」这个跨主题可见性契约。
+		const running = renderToStaticMarkup(
+			<CompactionStepView status="running" label="Compacting context…" summary="partial" />,
+		);
+		const settled = renderToStaticMarkup(
+			<CompactionStepView status="success" label="Context compacted" summary="earlier work" expanded />,
+		);
+
+		for (const markup of [running, settled]) {
+			expect(markup).not.toMatch(/(?:text|border|bg)-primary/);
+		}
+		expect(running).toContain("text-sky-500/80");
+		expect(running).toContain("enabled:hover:bg-sky-500/10");
+		expect(settled).toContain("text-sky-500");
+		expect(settled).toContain("border-sky-500/25");
 	});
 });

@@ -98,7 +98,7 @@ describe("CompactionBlockView markdown 稳定性", () => {
 	it("running 状态自动展开长摘要不会陷入更新循环", () => {
 		const summary = makeSummary(120);
 		const { host } = createMarkdownHostFixture();
-		render(
+		const { container } = render(
 			<RendererMarkdownScope
 				value={{
 					host,
@@ -112,7 +112,11 @@ describe("CompactionBlockView markdown 稳定性", () => {
 				<CompactionBlockView block={{ id: "c2", type: "compaction", status: "running", summary }} />
 			</RendererMarkdownScope>,
 		);
-		expect(screen.getByRole("heading", { name: "已完成的工作" })).toBeTruthy();
+		const button = screen.getByRole("button", { name: "messageList.compactionStep.running" });
+		expect(button.getAttribute("aria-expanded")).toBe("true");
+		const summaryText = container.querySelector("[data-compaction-summary]")?.textContent ?? "";
+		expect(summaryText).toContain("## 已完成的工作");
+		expect(screen.queryByRole("heading", { name: "已完成的工作" })).toBeNull();
 	}, 60_000);
 	void scope;
 });

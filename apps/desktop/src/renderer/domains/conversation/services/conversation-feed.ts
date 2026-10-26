@@ -443,7 +443,12 @@ function applyCompactionEvent(
 	const item = resolved.items[itemIndex] as AgentItem;
 	const blocks = [...item.blocks];
 	if (event.type === "compaction.start") {
-		blocks.push({ type: "compaction", id: `${item.id}:compaction:${event.eventId}`, status: "running" });
+		const stepId = `${item.id}:compaction:${event.eventId}`;
+		// 重连后 runtime 会重放已发生的事实。同一步的开始事件再来一次时，这一行已经在页面上：
+		// 再 push 一个同 id 的块会造成 React key 冲突，而且 delta 只落到最后一块，
+		// 先到的那一行会永远停在 running。
+		if (blocks.some((block) => block.type === "compaction" && block.id === stepId)) return state;
+		blocks.push({ type: "compaction", id: stepId, status: "running" });
 	} else if (event.type === "compaction.delta") {
 		// The summary streams while the step runs, so readers can follow it before it settles.
 		const deltaIndex = located?.blockIndex ?? findRunningCompaction(blocks);

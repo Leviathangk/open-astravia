@@ -14,11 +14,14 @@ const LABEL_KEYS = {
 	skipped: "messageList.compactionStep.skipped",
 } as const;
 
-/** 压缩摘要是模型写的叙述，按 Markdown 预览而不是原文墙展示；引用要稳定，否则每帧重建整棵 Markdown 树。 */
+/** 压缩摘要运行期只追加纯文本，压缩结束才整篇解析一次；引用要稳定，否则每帧重建整棵 Markdown 树。 */
 function renderSummaryMarkdown(text: string, streaming: boolean) {
-	// 运行中摘要每 100ms 长一截：交给流式尾块管线（节流快照 + 已闭合块冻结），
-	// 否则每次增量都整篇重解析，表格/代码块反复重建。
-	return <MarkdownContent text={text} isStreamingTail={streaming} />;
+	// 摘要在运行期每 100ms 长一截，而整篇 Markdown 解析的成本随长度线性增长（实测 20k 约 50ms、120k 可达 1s 以上），
+	// 远超流式节流间隔。生产日志里能归因的 #185（Maximum update depth exceeded）崩溃栈有 233/234 落在这张卡上，
+	// 且都指向这棵子树里的更新入队处。增长期改走纯文本：每次增量只是一次文本节点更新，成本与长度无关，
+	// 这个子树里也不再挂载 useStreamingDisplayText / useRenderSnapshot 这两个 setState 生产者；压缩结束后整篇解析一次。
+	if (streaming) return <div className="whitespace-pre-wrap">{text}</div>;
+	return <MarkdownContent text={text} />;
 }
 
 /** Automatic compaction as a step of the reply; opens to the summary that replaced earlier context. */
@@ -30,7 +33,9 @@ export const CompactionBlockView = memo(function CompactionBlockView({
 	readonly exportMode?: boolean;
 }) {
 	const { t } = useTranslation("chat");
-	const [expanded, toggle] = useExpansion(`compaction:${block.id}`);
+	// 展开态必须活在组件外：Virtuoso 把条目滚出视窗就会卸载重挂，组件内 state 会归零。
+	// running 的默认展开也交给 store 的默认值，组件内不再记第二份用户选择。
+	const [expanded, toggle] = useExpansion(`compaction:${block.id}`, block.status === "running");
 	// 摘要可长达数万字符，清洗与 Markdown 重渲都只在文本变化时做一次。
 	const summary = useMemo(() => {
 		if (block.summary === undefined) return undefined;

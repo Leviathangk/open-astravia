@@ -21,6 +21,7 @@ import { ModelSwitchBoundary } from "../components/message-list/MessageItem";
 import { MessageTimeline } from "../components/message-list/MessageTimeline";
 import { DefaultAgentMessage, DefaultEventMessage, DefaultUserMessage } from "./defaults";
 import { ConversationRowDecorations } from "./extensions";
+import { MessageRowBoundary } from "./message-row-boundary";
 import { ConversationMessageScope } from "./message-scope";
 import { type MessageTemplates, useMessageTemplates } from "./templates";
 import { ConversationUsagesContext } from "./usages";
@@ -35,7 +36,11 @@ const DEFAULT_TEMPLATES: Readonly<Record<ChatConversationItem["kind"], ReactNode
 	event: <DefaultEventMessage />,
 };
 
-/** Spacing and scroll anchor of one row; the last user message keeps room for its actions. */
+/**
+ * Spacing and scroll anchor of one row; the last user message keeps room for its actions.
+ *
+ * 正文渲染的异常由这里的边界拦住：冒出去会被 route errorElement 换成整页错误页。
+ */
 function MessageRow({
 	message,
 	isLast,
@@ -51,7 +56,7 @@ function MessageRow({
 			data-entry-id={message.entryId ?? message.id}
 			className={isLast && message.kind === "user" ? "pb-9" : "pb-5"}
 		>
-			{children}
+			<MessageRowBoundary resetKey={message.entryId ?? message.id}>{children}</MessageRowBoundary>
 		</div>
 	);
 }

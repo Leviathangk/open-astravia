@@ -114,16 +114,32 @@ describe("Desktop release workflow contracts", () => {
 
 		const steps = metadata.jobs.publish.steps;
 		const position = (name) => steps.findIndex((step) => step.name === name);
-		const download = position("Download updater artifacts");
+		// 下载拆成「当前 run」与「别的 run」两步：只要传了 github-token，download-artifact 就
+		// 走跨 run 的 API 路径并把空的 run-id 拼成 NaN（v0.5.79 首发真实踩到：清单没上 Release，
+		// 旧版客户端「检查更新」一无所获），所以两条分支必须泾渭分明。
+		const download = position("Download updater artifacts (this run)");
+		const downloadOtherRun = position("Download updater artifacts (another run)");
 		const merge = position("Merge macOS per-architecture metadata");
 		const attach = position("Attach update metadata to GitHub Release");
 		const verify = position("Verify update feed");
-		for (const index of [download, merge, attach, verify]) expect(index).toBeGreaterThanOrEqual(0);
+		for (const index of [download, downloadOtherRun, merge, attach, verify]) {
+			expect(index).toBeGreaterThanOrEqual(0);
+		}
+		expect(steps[download].with.pattern).toBe("desktop-*");
+		expect(steps[download].with["merge-multiple"]).toBe(true);
+		// 自动发布走这条：不传 run-id，也不传 github-token（后者一传就换路径）。
+		expect(steps[download].if).toBe("inputs.run_id == ''");
+		expect(steps[download].with["run-id"]).toBeUndefined();
+		expect(steps[download].with["github-token"]).toBeUndefined();
+		// 补发历史版本走另一条：必须显式给 run-id 和 token。
+		expect(steps[downloadOtherRun].if).toBe("inputs.run_id != ''");
+		expect(steps[downloadOtherRun].with["run-id"]).toBe("$" + "{{ inputs.run_id }}");
+		expect(download).toBeLessThan(downloadOtherRun);
 		expect(steps[download].with.pattern).toBe("desktop-*");
 		expect(steps[download].with["merge-multiple"]).toBe(true);
 		// arm64 与 x64 两份按架构命名的清单不合并，MacUpdater 会在其中一种架构上找不到 ZIP。
 		expect(steps[merge].run).toContain("node scripts/merge-mac-update-metadata.mjs");
-		expect(download).toBeLessThan(merge);
+		expect(downloadOtherRun).toBeLessThan(merge);
 		expect(merge).toBeLessThan(attach);
 		expect(steps[attach].run).toContain("gh release upload");
 		expect(steps[attach].run).toContain("latest*.yml");

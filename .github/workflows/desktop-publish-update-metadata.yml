@@ -60,6 +60,28 @@ jobs:
         uses: ./.github/actions/install-bun-dependencies
 
       # 四个平台的产物合并到同一个目录：latest*.yml 各自名字不同，不会互相覆盖。
+      #
+      # 拆成两步是必需的，不能靠「run-id 留空即取当前 run」：只要传了 github-token，
+      # download-artifact 就走跨 run 的 API 路径，把空的 run-id 拼成 NaN，直接报
+      # `Fetching artifact list for workflow run NaN` / `Not Found`。v0.5.79 首发时
+      # 就是这个错误让清单没附到 Release 上，旧版客户端的「检查更新」一无所获。
+      - name: Download updater artifacts (this run)
+        if: inputs.run_id == ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: apps/desktop/release
+
+      - name: Download updater artifacts (another run)
+        if: inputs.run_id != ''
+        uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-*
+          merge-multiple: true
+          path: apps/desktop/release
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
       - name: Download updater artifacts
         uses: actions/download-artifact@v4
         with:

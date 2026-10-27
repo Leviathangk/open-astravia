@@ -57,6 +57,19 @@ if (!streamedRef.current || !text.startsWith(shown)) {
 - 可见行为不变：`animateChunks` 仍由 state 驱动，包裹类依旧在收束后停留一拍再随 `settle` 撤除（已无像素差异）；分段 span 的结构与 `chunkedRef` 粘性语义均未触动。
 - 不承诺端到端帧率
 
+## 生产复核（提交后再上报的 #185）
+
+`1f55ac977` 合入之后仍有用户报同一条崩溃（Minified React error #185，Maximum update depth exceeded），栈为
+`MarkdownContent-CAmaJ5En.js:5:1738` ← `RendererMarkdownContent` ← `useOpenActivityTab` ← `UserMessageView` ← `WriteContentView` ← `ChatPage` ← `renderApp`。
+
+**归属结论：该崩溃来自不包含本项修复的构建。** 上报者本机安装的是 `0.5.78`（`/Applications/Astravia.app`，构建于 2026-10-25 17:22），而 `03aadecb2`（删掉非节流路径上那次多余提交）与 `1f55ac977`（本项）都在 2026-10-27，`git merge-base --is-ancestor` 对三者均返回「不在 v0.5.78 里」。所以这一轮不缺修复，缺的是发版：只有在 `latest*.yml` 一并附到 Release 之后，停在旧版的客户端才拿得到它。
+
+栈本身不能用来定位触发点。`use-render-snapshot.ts` 的注释已经写明「抛出点落在下一次任意状态更新上」，而这里最内层的 markdown 实例挂在计划/工具卡片下（不是压缩摘要卡），说明可达路径至少还有一条不经过 `CompactionBlock` 的纯文本兜底。这一点记为已知边界，不作为本项结论。
+
+复核中否掉的一个假设：曾怀疑超预算镜像态仍在每个增量上 `setAnimateChunks(true)`（暗色挂上→`settle` 撤掉→下一拍再挂上，每拍多一次提交，并让 `rehypePlugins` 换身份、整篇重新解析）。实测不成立 —— 跨过阈值的 `reveal()` 以 `final` 收尾并调用 `settle`，而 `settle` 的定时器回调会把 `streamedRef` 置回假，于是下一个增量落进「直接对齐」分支，循环不会形成。已用关掉该守卫的对照实验验证：断言在两种实现下都通过，因此不为此改代码，只把结论记在这里，避免下一次重新推导。
+
+仍留在账上的一条已知成本（本项不处理）：`useRenderSnapshot` 的 `live` 门是 `isStreamingTail && renderInterval > 0 && !replaced`，即**节流只对宿主声明的流式尾块生效**。不传 `isStreamingTail` 的 markdown（用户消息、计划卡、工具输出卡）即便长到几万字符，增量到达时仍是整篇重解析，`resolveStreamRenderInterval` 算了间隔也没人用。改成按「文本是否在增长」判断会影响所有 markdown 的可见延迟，本轮没有可复现的失败用例支撑，不在发版前动它。
+
 ## 迁移与验证
 
 没有数据迁移，消息仍保存原始 markdown。renderer 侧无状态格式变化。
@@ -65,4 +78,4 @@ if (!streamedRef.current || !text.startsWith(shown)) {
 
 实机回归未执行：本轮未获得启动桌面实例的授权，帧率与长会话手感仍需真机确认。
 
-参考：[ADR-0131](0131-markdown-rich-content-rendering.md)、[ADR-0116](0116-message-feed-local-rendering-extensions.md)、[ADR-0102](0102-lossless-assistant-event-stream.md)、[React：你可能不需要 Effect](https://react.dev/learn/you-might-not-need-an-effect)、[React：state 更新批处理](https://react.dev/learn/queueing-a-series-of-state-updates)。
+参考：[ADR-0131](0131-markdown-rich-content-rendering.md)

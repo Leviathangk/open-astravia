@@ -160,10 +160,14 @@ function ReleaseNotePreview({
 
 	return (
 		<div className="relative mt-2">
+			{/* 裁切必须写在 style 里。`.markdown-body` 在 styles.css 里以非分层规则声明了
+			    `overflow: visible`（防 vibrancy 合成层裁剪正文），非分层规则胜过 Tailwind 分层
+			    工具类 —— 只写 `overflow-hidden` 会被它盖掉，长说明溢出 240px 的盒子、盖住下面
+			    的「启动 App 引导」行。只给 max-height 也不够：它管布局高度，不管绘制。 */}
 			<div
-				className="markdown-body overflow-hidden text-[12.5px] leading-[1.5] text-muted-foreground break-words"
+				className="markdown-body text-[12.5px] leading-[1.5] text-muted-foreground break-words"
 				data-testid="updater-release-note"
-				style={{ maxHeight: `${MAX_HEIGHT_PX}px` }}
+				style={{ maxHeight: `${MAX_HEIGHT_PX}px`, overflow: "hidden" }}
 			>
 				<div ref={innerRef}>
 					<ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>

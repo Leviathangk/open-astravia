@@ -82,15 +82,6 @@ jobs:
           path: apps/desktop/release
           run-id: ${{ inputs.run_id }}
           github-token: ${{ github.token }}
-      - name: Download updater artifacts
-        uses: actions/download-artifact@v4
-        with:
-          pattern: desktop-*
-          merge-multiple: true
-          path: apps/desktop/release
-          # 空值表示取当前 run 的 artifact；只有补发历史版本才需要跨 run 取（走 API）。
-          run-id: ${{ inputs.run_id }}
-          github-token: ${{ github.token }}
 
       # arm64 与 x64 两次构建各写一份 latest-mac-<arch>.yml，不合并的话
       # MacUpdater.filterFilesForArch 会在其中一种架构上找不到 ZIP。

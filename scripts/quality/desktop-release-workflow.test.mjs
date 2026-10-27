@@ -135,6 +135,17 @@ describe("Desktop release workflow contracts", () => {
 		expect(steps[downloadOtherRun].if).toBe("inputs.run_id != ''");
 		expect(steps[downloadOtherRun].with["run-id"]).toBe("$" + "{{ inputs.run_id }}");
 		expect(download).toBeLessThan(downloadOtherRun);
+		// 只许这两步。留下第三步无 if 的旧写法，自动发布时它会带着 token 和空 run-id 再跑
+		// 一遍，把已经在前面成功下载好的产物换成 `Fetching artifact list for workflow run
+		// NaN`（v0.5.80 首发就是这样：前一步拿到 4 个产物，后一步让整个 job 失败）。
+		const downloadSteps = steps.filter((step) => String(step.uses ?? "").includes("actions/download-artifact"));
+		expect(downloadSteps).toHaveLength(2);
+		for (const step of downloadSteps) {
+			expect(step.if).toBeTruthy();
+		}
+		expect(steps[downloadOtherRun].if).toBe("inputs.run_id != ''");
+		expect(steps[downloadOtherRun].with["run-id"]).toBe("$" + "{{ inputs.run_id }}");
+		expect(download).toBeLessThan(downloadOtherRun);
 		expect(steps[download].with.pattern).toBe("desktop-*");
 		expect(steps[download].with["merge-multiple"]).toBe(true);
 		// arm64 与 x64 两份按架构命名的清单不合并，MacUpdater 会在其中一种架构上找不到 ZIP。

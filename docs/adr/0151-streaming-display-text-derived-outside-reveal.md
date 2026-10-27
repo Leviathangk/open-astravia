@@ -76,6 +76,21 @@ if (!streamedRef.current || !text.startsWith(shown)) {
 
 新增 `streaming-mirror.test.tsx` 四例，覆盖：超过 1.2 万字符的连续增量每次只渲染一次（改动前为两次）、跨过阈值后每个增量只渲染一次（`counts.slice(1)` 全为 1）、`active` 为假时返回值等于 `text`、`active` 翻回真之后第一帧即为当前文本并在其后接着放。既有不变量测试（reveal 节奏、扣留、settle、`MarkdownContent` 稳定块与富内容渲染）原样通过，一条未放宽。
 
+另有 `streaming-chunk-path.test.tsx` 两例固定两条路径的归属：用户消息不挂分段插件，助手尾块超预算后不挂插件但保留 `.markdown-streaming-tail`，见 [ADR-0152](0152-streaming-chunk-segmentation-length-budget.md)。
+
+### 差分复核
+
+同一段输入，两种实现各跑一次（本轮补测）：
+
+| 实现 | `streaming-mirror.test.tsx` | 含义 |
+| --- | --- | --- |
+| `v0.5.78` 的 `streaming.ts` / `MarkdownContent.tsx` / `use-render-snapshot.ts` | 2 例红：`expected [2, 2, 2, 2, 2, 2, 2] to deeply equal [1, 1, 1, 1, 1, 1, 1]` | 每个增量两次提交，正是嵌套成 #185 的形态 |
+| 当前实现 | 全绿 | 每个增量一次提交 |
+
+红绿信号就是这一条：`cd packages/theme-ui && node ../../scripts/quality/run-vitest.mjs run src/markdown/streaming-mirror.test.tsx`。
+
+会话级的 jsdom 用例不能当这个 bug 的红绿信号：把上面三个文件连同 `CompactionBlock.tsx` 一起退回 `v0.5.78`，`SessionConversation.compaction-stream.test.tsx` 仍然全绿（实测）。它能验「压缩卡不再逐段解析 Markdown」，验不了「每增量多一次提交」—— jsdom 里的 React 与生产构建的嵌套更新计数不同。要重现这条崩溃，只能回到提交级计数断言，或用生产构建重放。
+
 实机回归未执行：本轮未获得启动桌面实例的授权，帧率与长会话手感仍需真机确认。
 
 参考：[ADR-0131](0131-markdown-rich-content-rendering.md)

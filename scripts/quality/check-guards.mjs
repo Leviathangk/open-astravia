@@ -10,6 +10,7 @@ const FULL_STEPS = Object.freeze([
 	["agent-modes", "apps/desktop/scripts/build-agent-modes.mjs", "--check"],
 	["private-keys", "scripts/quality/check-private-keys.mjs"],
 	["conflict-markers", "scripts/quality/check-conflict-markers.mjs"],
+	["adr-numbering", "scripts/quality/check-adr-numbering.mjs"],
 	["package-boundaries", "scripts/quality/check-package-boundaries.mjs"],
 	["coding-agent-architecture", "scripts/quality/check-coding-agent-architecture.mjs"],
 	["runtime-independence", "scripts/quality/check-runtime-coding-agent-independence.mjs"],
@@ -136,6 +137,8 @@ export function createQuickGuardPlan(inputFiles) {
 		add("standalone-cli-build");
 	}
 	if (files.some((file) => file.endsWith("SKILL.md"))) add("skill-frontmatter");
+	if (files.some((file) => /^docs\/adr\//u.test(file))) add("adr-numbering");
+	if (files.some((file) => file.endsWith("package.json"))) add("vitest-runner");
 	if (files.some((file) => file.endsWith("package.json"))) add("vitest-runner");
 	if (files.some((file) => file.endsWith("package.json") || /(?:^|\/)tsconfig[^/]*\.json$/u.test(file))) {
 		add("source-path-maps");

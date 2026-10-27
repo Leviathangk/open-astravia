@@ -28,6 +28,7 @@ import { chatUrlTransform, classifyMarkdownLink, normalizeLocalFileLinksInMarkdo
 import {
 	resolveStreamRenderInterval,
 	shouldRevealStreamingTail,
+	STREAM_CHUNK_MAX_CHARS,
 	useStreamingDisplayText,
 	rehypeStreamingChunks,
 } from "./streaming";
@@ -173,6 +174,9 @@ export const MarkdownContent = memo(function MarkdownContent({
 	const { displayText, animateChunks } = useStreamingDisplayText(text, shouldRevealStreamingTail(text, isStreamingTail));
 	const chunkedRef = useRef(false);
 	if (animateChunks) chunkedRef.current = true;
+	// 分段只在同一条预算之内（ADR-0152）：超限的尾块按帧到达，逐短语 span 既没有视觉作用，
+	// 又要每次重解析重建一遍；包裹类仍跟着 `animateChunks` 走，不随分段一起关。
+	const chunkTail = chunkedRef.current && displayText.length <= STREAM_CHUNK_MAX_CHARS;
 	const frozenBlocksRef = useRef(false);
 	if (isStreamingTail && !inlineTokens) frozenBlocksRef.current = true;
 	const splitDocuments = frozenBlocksRef.current && !inlineTokens;
@@ -413,7 +417,7 @@ export const MarkdownContent = memo(function MarkdownContent({
 			{showTail ? (
 				<MarkdownDocument
 					key="tail"
-					animateChunks={chunkedRef.current}
+					animateChunks={chunkTail}
 					components={components}
 					definition={definition}
 					inlineTokens={inlineTokens}

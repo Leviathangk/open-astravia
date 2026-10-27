@@ -100,6 +100,13 @@ export function shouldRevealStreamingTail(text: string, isStreamingTail: boolean
 	return isStreamingTail && text.length <= STREAM_ANIMATE_MAX_CHARS;
 }
 
+/**
+ * 短语分段的长度预算，与 reveal 同一上限：超过这个长度的尾块按帧到达，没有逐短语节奏，
+ * 而 `.streaming-chunk` 的 `-latest` / `-recent` 已经不带视觉差异（只剩 DOM 结构），
+ * 却要每次重解析都重建一遍 span。所以超限后不再挂 `rehypeStreamingChunks`。
+ */
+export const STREAM_CHUNK_MAX_CHARS = STREAM_ANIMATE_MAX_CHARS;
+
 /** 超过这个长度先按 200ms 节流，再超过大阈值放宽到 400ms。 */
 export const STREAM_RENDER_INTERVAL_SMALL_CHARS = 12_000;
 export const STREAM_RENDER_INTERVAL_LARGE_CHARS = 50_000;
@@ -182,7 +189,8 @@ export function useStreamingDisplayText(text: string, active: boolean): Streamin
 			if (step && step.end > shown) {
 				const next = target.slice(0, step.end);
 				displayRef.current = next;
-				setDisplayText(next);
+				// 镜像态的显示文本由渲染从 text 派生，这份副本再提交也看不见。
+				if (activeRef.current) setDisplayText(next);
 				lastAdvanceAtRef.current = now;
 			}
 			if (displayRef.current.length >= target.length) lastAdvanceAtRef.current = now;
@@ -208,9 +216,13 @@ export function useStreamingDisplayText(text: string, active: boolean): Streamin
 	// 用布局效果：放出后的 setState 会在浏览器绘制前同步重渲染，与宿主那次增量刷新落在同一帧。
 	useLayoutEffect(() => {
 		const textChanged = targetRef.current !== text;
+		const wasActive = activeRef.current;
 		targetRef.current = text;
 		activeRef.current = active;
 		if (active) streamedRef.current = true;
+		// 镜像态不写显示文本的 state，切回逐字 reveal 时先把 state 对齐到已放出文本，
+		// 否则这一帧会渲染一份旧副本。只在切换这一次提交，不是每个增量。
+		if (active && !wasActive) setDisplayText(displayRef.current);
 
 		const shown = displayRef.current;
 		if (!streamedRef.current || !text.startsWith(shown)) {
@@ -220,7 +232,8 @@ export function useStreamingDisplayText(text: string, active: boolean): Streamin
 			samplesRef.current = [];
 			heldSinceRef.current = null;
 			displayRef.current = text;
-			setDisplayText(text);
+			// 不逐字 reveal 时显示文本由渲染直接派生，这里再提交一份只会让同一屏渲染两次。
+			if (active) setDisplayText(text);
 			setAnimateChunks(false);
 			streamedRef.current = active;
 			return;
@@ -239,5 +252,9 @@ export function useStreamingDisplayText(text: string, active: boolean): Streamin
 		reveal();
 	}, [text, active, reveal]);
 
+	// 镜像态（不逐字 reveal）由宿主文本直接派生：此时布局相不再推进副本，读 state 会滞后一帧。
+	// 反过来，那两处副本提交从每个增量一次变成了只在切换那一次 —— 每增量只剩宿主自己那一次。
+	// `animateChunks` 仍取 state：尾部收束时「暗色停留一拍再撤」是既有可观察行为，不随后者一起派生。
+	if (!active) return { displayText: text, animateChunks };
 	return { displayText, animateChunks };
 }

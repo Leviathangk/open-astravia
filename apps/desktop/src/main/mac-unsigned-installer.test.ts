@@ -60,6 +60,12 @@ async function spawnShortLivedProcess(): Promise<number> {
 	return pid;
 }
 
+/**
+ * 脚本本身是纯文本，可以任何平台断言；真正跑 `bash` + `ditto` 的用例只在 macOS
+ * 成立——CI 的 ubuntu / windows runner 上没有这些命令，也不存在 `.app` 这种布局。
+ */
+const onMacOS = process.platform === "darwin";
+
 describe("mac unsigned installer", () => {
 	afterEach(async () => {
 		await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
@@ -99,7 +105,7 @@ describe("mac unsigned installer", () => {
 		expect(script).toContain("ARCHIVE='/tmp/a b.zip'");
 	});
 
-	it("replaces the bundle and relaunches, end to end", async () => {
+	it.skipIf(!onMacOS)("replaces the bundle and relaunches, end to end", async () => {
 		const root = await temporaryRoot();
 		const appPath = join(root, "Applications", "Astravia.app");
 		await writeFakeApp(appPath, "0.5.80");
@@ -134,7 +140,7 @@ describe("mac unsigned installer", () => {
 		await expect(readFile(`${appPath}.old/Contents/MacOS/version.txt`, "utf8")).rejects.toThrow();
 	});
 
-	it("leaves the bundle untouched when the old process never exits", async () => {
+	it.skipIf(!onMacOS)("leaves the bundle untouched when the old process never exits", async () => {
 		const root = await temporaryRoot();
 		const appPath = join(root, "Astravia.app");
 		await writeFakeApp(appPath, "0.5.80");
@@ -158,7 +164,7 @@ describe("mac unsigned installer", () => {
 		await expect(readFile(join(appPath, "Contents", "MacOS", "version.txt"), "utf8")).resolves.toBe("0.5.80");
 	});
 
-	it("keeps the old bundle when the archive cannot be unpacked", async () => {
+	it.skipIf(!onMacOS)("keeps the old bundle when the archive cannot be unpacked", async () => {
 		const root = await temporaryRoot();
 		const appPath = join(root, "Astravia.app");
 		await writeFakeApp(appPath, "0.5.80");

@@ -255,6 +255,12 @@ export class ElectronUpdaterEngine implements UpdateEngine {
 			: updaterDownloadPromise;
 		const promise = stagedDownloadPromise
 			.then(async (downloadedPaths) => {
+				// 未签名包：ZIP 已经落盘并通过哈希校验，直接认领，不等 Squirrel 的验签结论。
+				// 「Squirrel 拒绝」有两种到达方式——downloadUpdate reject（下面的 catch 接）
+				// 和只发一个 error 事件、Promise 照常 resolve。只处理前者时，ZIP 始终没被认领，
+				// quitAndInstall() 就会退回 Squirrel 那条对未签名包必然失败的路：
+				// 进度停在 100%、进程退出、用户重开还是旧版本，且全程没有任何报错。
+				if (this.macUnsignedInstall) this.macPendingArchive ??= await this.findPendingArchive();
 				if (!this.useInnoUpdate || !this.innoWindowsUpdate) return downloadedPaths;
 				const installerPath = downloadedPaths[0];
 				if (!installerPath) throw new Error("electron-updater did not return a Windows installer");
@@ -335,17 +341,31 @@ export class ElectronUpdaterEngine implements UpdateEngine {
 	}
 
 	async quitAndInstall(): Promise<void> {
+		// 未签名包只有内置安装器这一条路。绝不能退回 Squirrel：它对未签名包的替换前
+		// 验签必然失败，而失败发生后没有人再改道，用户看到的就是「进度到 100%、
+		// 应用退出、重开还是旧版本」。宁可在这里就报错。
+		// 走到这里时 ZIP 理论上已经认领（下载阶段 + 下载失败的 catch），再兜一次是
+		// 为了兼容先 quitAndInstall 后下载的旧调用顺序。
+		// 这个检查必须排在 prepare 之前：prepare 会标记 isQuitting、写重启标记并跑完
+		// 退出清理，报错如果落在它后面，应用就停在「清理已做、窗口已关、却还活着」的状态。
+		const macInstaller = this.macUnsignedInstall;
+		let macArchive: string | undefined;
+		if (macInstaller) {
+			this.macPendingArchive ??= await this.findPendingArchive();
+			macArchive = this.macPendingArchive;
+			if (!macArchive) throw new Error("unsigned macOS update has no staged archive to install");
+		}
 		// 交棒前：标记「正在退出」并跑完退出清理。不标记的话窗口 close 守卫会把关闭
 		// 改成隐藏，而 Squirrel.Mac 走 NSApp terminate 语义，任一窗口 preventDefault
 		// 就取消整个终止流程——症状是「点了重启但应用没退」。
 		await this.quitHooks.prepare?.();
-		if (this.macUnsignedInstall && this.macPendingArchive) {
+		if (macInstaller && macArchive) {
 			// 未签名包：Squirrel 装不了，改由脱离进程的脚本等本进程退出后换包。
-			const launch = this.macUnsignedInstall.launch ?? launchMacUnsignedInstaller;
+			const launch = macInstaller.launch ?? launchMacUnsignedInstaller;
 			const scriptPath = await launch({
-				appPath: this.macUnsignedInstall.appPath,
-				archivePath: this.macPendingArchive,
-				cacheRoot: this.macUnsignedInstall.cacheRoot,
+				appPath: macInstaller.appPath,
+				archivePath: macArchive,
+				cacheRoot: macInstaller.cacheRoot,
 				scriptName: this.macAssetFileName?.replace(/\.zip$/u, "") ?? "update",
 			});
 			console.info("[updater] built-in installer script is running:", scriptPath);

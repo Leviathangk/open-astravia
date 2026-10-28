@@ -1105,12 +1105,15 @@ a {
 
 
 /* ── 主题专属侧栏配色 ──────────────────────────────────────────────
-   四套彩色主题的侧栏底色统一比主画布**深一档**（对比度：深色 1.15–1.17，
-   浅色 1.10–1.12），让侧栏先读成一条独立的「脊」，再读成画布的一部分。
+   四套彩色主题的侧栏底色统一比主画布**深一档**（对比度：深色 1.09–1.17，
+   浅色 1.08–1.19），让侧栏先读成一条独立的「脊」，再读成画布的一部分。
    浅色曾经取「比画布更亮」的一侧，四套主题都挤在 1.01–1.06 的亮度区间里，
    看上去像同一块米白，层次感反而比深色更平——浅色要的层次只能靠向下压暗拿到。
 
-   深色下四套主题还各自往不同色相偏：森林縖欖绿、蜜蜂蜜金、薄荷青绿、羊皮纸赭红。
+   主画布本身在四套主题里抬过一档（2026-10 优化“深色太暗、浅色单调”）：
+   画布提亮后侧栏不能再沿用旧值，否则两者的对比会压到 1.05 以下，侧栏的脊就没了。
+
+   深色下四套主题还各自往不同色相偏：森林橄榄绿、蜜蜂蜜金、薄荷青绿、羊皮纸赭红。
    不偏色的后果是“森林”与“薄荷”的深色侧栏只差 RGB 距离 5.8，根本读成同一套主题；
    现在两两距离拉到了 14 以上（薄荷↔羊皮纸 42）。
 
@@ -1182,23 +1185,23 @@ a {
 }
 
 :root[data-theme="mint"][data-mode="dark"] .sidebar-surface {
-	--muted: #091b17;
-	--border: #1a3a33;
-	--sidebar-bg: #082226;
+	--muted: #0d2526;
+	--border: #1f423c;
+	--sidebar-bg: #0a2b2e;
 }
 :root[data-theme="mint"][data-mode="light"] .sidebar-surface {
-	--muted: #c6e2de;
-	--border: #c4ded9;
-	--sidebar-bg: #d6ece8;
+	--muted: #c3ded7;
+	--border: #bcd6cf;
+	--sidebar-bg: #cbe4de;
 }
 
 :root[data-theme="parchment"][data-mode="dark"] .sidebar-surface {
-	--muted: #1c110c;
-	--border: #3a271b;
-	--sidebar-bg: #2f1a12;
+	--muted: #241610;
+	--border: #3f2b1e;
+	--sidebar-bg: #33201a;
 }
 :root[data-theme="parchment"][data-mode="light"] .sidebar-surface {
-	--muted: #e4d3bc;
-	--border: #d6c4ab;
-	--sidebar-bg: #ecdfcb;
+	--muted: #e4d5bd;
+	--border: #d6c2a4;
+	--sidebar-bg: #e9dcc6;
 }

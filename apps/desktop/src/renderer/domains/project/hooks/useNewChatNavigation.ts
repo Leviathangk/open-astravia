@@ -1,5 +1,6 @@
+import { decodeNewSessionCwd, newSessionTarget } from "@shared/app-shell/new-session-route";
 import { activeSessionAtom, conversationBucketCwd, defaultConversationCwdAtom } from "@shared/store/atoms";
-import { useMatches, useNavigate } from "@tanstack/react-router";
+import { useMatches, useNavigate, useSearch } from "@tanstack/react-router";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useCallback } from "react";
 
@@ -12,16 +13,20 @@ export function useNewChatNavigation(): () => void {
 	const matches = useMatches();
 	const lastMatch = matches[matches.length - 1];
 	const currentPath = lastMatch?.pathname ?? "/";
+	// 规范的新会话路由把目标 cwd 放在 `?cwd=` 上（见 new-session-route.ts）。
+	const search = useSearch({ strict: false }) as { cwd?: string };
+	const searchCwd = currentPath.startsWith("/new-session") ? decodeNewSessionCwd(search.cwd) : undefined;
 	const activeSession = useAtomValue(activeSessionAtom);
 	const defaultConversationCwd = useAtomValue(defaultConversationCwdAtom);
 	const setDefaultConversationCwd = useSetAtom(defaultConversationCwdAtom);
 
 	// 目标 cwd 解析顺序：
-	//   1. 当前路由参数 cwd（/project/$cwd 或 /new-session/$cwd）—— 项目详情聚焦
-	//   2. 仅在聊天页（/）时，跟随 activeSession 的 cwd —— 聚焦的是「某项目的会话」时落到该项目。
+	//   1. 当前路由参数 cwd（/project/$cwd）—— 项目详情聚焦
+	//   2. 当前就在新会话页（/new-session?cwd=…）时沿用它，重复点「新会话」不丢选中的项目
+	//   3. 仅在聊天页（/）时，跟随 activeSession 的 cwd —— 聚焦的是「某项目的会话」时落到该项目。
 	//      ADR-0007：默认「对话」session 的运行 cwd 是默认项目根下的 per-session 子目录，
 	//      必须归一回项目根，否则新会话会挂到子目录 bucket、不在「会话」列表出现。
-	//   3. 其余一切场景（自动化/批量任务/Claw 查看器/设置等）落到默认「会话」项目，
+	//   4. 其余一切场景（自动化/批量任务/Claw 查看器/设置等）落到默认「会话」项目，
 	//      不能沿用残留的 activeSession.cwd，否则会把新会话建到上一个项目里。
 	const newChatCwd = (() => {
 		const params = lastMatch?.params as { cwd?: string } | undefined;
@@ -32,6 +37,7 @@ export function useNewChatNavigation(): () => void {
 				return params.cwd;
 			}
 		}
+		if (searchCwd) return searchCwd;
 		if (currentPath === "/" && activeSession?.cwd) {
 			return conversationBucketCwd(activeSession.cwd, defaultConversationCwd);
 		}
@@ -51,10 +57,7 @@ export function useNewChatNavigation(): () => void {
 				}
 			}
 			if (!targetCwd) return;
-			void navigate({
-				to: "/new-session/$cwd",
-				params: { cwd: encodeURIComponent(targetCwd) },
-			});
+			void navigate(newSessionTarget(targetCwd));
 		})();
 	}, [navigate, newChatCwd, setDefaultConversationCwd]);
 }

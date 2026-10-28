@@ -1,4 +1,5 @@
 import type { ProjectDetailPageViewProps } from "@astravia-org/theme-ui/project";
+import { newSessionTarget } from "@shared/app-shell/new-session-route";
 import { isMac } from "@shared/lib/platform";
 import { pathBasename } from "@shared/lib/utils";
 import { useShortcutScope } from "@shared/shortcuts";
@@ -320,7 +321,7 @@ export function useProjectDetailPageModel(
 		onEditorFocus: () => setEditorFocused(true),
 		onExport: handleExportProject,
 		onNewSession: () => {
-			void navigate({ to: "/new-session/$cwd", params: { cwd: encodeURIComponent(decodedCwd) } });
+			void navigate(newSessionTarget(decodedCwd));
 		},
 		onSave: () => {
 			void save();

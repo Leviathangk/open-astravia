@@ -1,4 +1,5 @@
 import { isSshProjectUri } from "@astravia/ssh-transport/project-uri";
+import { decodeNewSessionCwd } from "@shared/app-shell/new-session-route";
 import {
 	activeSessionAtom,
 	isStreamingAtom,
@@ -55,7 +56,7 @@ export function useDefaultExecutionModeSelectorModel(): ExecutionModeSelectorVie
 		[activeSession, mode, setMode],
 	);
 	const search = useSearch({ strict: false }) as { cwd?: string };
-	const cwd = activeSession?.cwd ?? (search.cwd ? decodeURIComponent(search.cwd) : null);
+	const cwd = activeSession?.cwd ?? decodeNewSessionCwd(search.cwd) ?? null;
 	return useExecutionModeSelectorModel({ cwd, mode, isStreaming, onSelectMode });
 }
 

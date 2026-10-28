@@ -13,6 +13,7 @@ const navigateSpy = vi.fn();
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateSpy,
 	useMatches: () => [{ pathname: "/", params: {} }],
+	useSearch: () => ({}),
 }));
 
 vi.mock("@domains/batch-tasks/hooks/useBatchTasks", () => ({
@@ -62,8 +63,8 @@ describe("useProjectsPanelModel.defaultNewSession", () => {
 
 		expect(store.get(defaultConversationFilterAtom)).toBe(tagConversationFilter("t1"));
 		expect(navigateSpy).toHaveBeenCalledWith({
-			to: "/new-session/$cwd",
-			params: { cwd: encodeURIComponent("/repo/a") },
+			to: "/new-session",
+			search: { cwd: encodeURIComponent("/repo/a") },
 		});
 	});
 });

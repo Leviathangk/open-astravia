@@ -1,5 +1,6 @@
 import type { NewSessionHeroIdentity } from "@astravia-org/theme-ui";
 import { useProjectActions } from "@domains/project/hooks/useProjects";
+import { decodeNewSessionCwd } from "@shared/app-shell/new-session-route";
 import { i18n } from "@shared/i18n";
 import {
 	abortMessageFnRef,
@@ -103,7 +104,7 @@ export function useNewSessionPageModel(): NewSessionPageModel {
 	const search = useSearch({ strict: false }) as { cwd?: string; target?: string };
 	const navigate = useNavigate();
 	const defaultConversationCwd = useAtomValue(defaultConversationCwdAtom);
-	const decodedCwd = search.cwd ? decodeURIComponent(search.cwd) : defaultConversationCwd;
+	const decodedCwd = decodeNewSessionCwd(search.cwd) ?? defaultConversationCwd;
 	const initialTargetKey = search.target ? parseNewSessionTarget(search.target) : null;
 	const [targetKey, setTargetKey] = useState<NewSessionTargetKey | null>(
 		initialTargetKey === "conversation" ? null : initialTargetKey,

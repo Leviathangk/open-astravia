@@ -63,13 +63,27 @@ describe.each(THEMES)("$id 主题色板", (theme) => {
 		for (let index = 1; index < ladders.length; index += 1) {
 			expect(ladders[index], `${steps[index - 1]} → ${steps[index]} 没有更亮`).toBeGreaterThan(ladders[index - 1]);
 		}
+		// 深色主题的主要抱怨是“太暗、没有光感”：画布亮度卡在 0.003 附近时，卡面、浮层、
+		// 边框再准也读不出层次。这里给画布定一个下限（不许压到纯黑）和上限（不许灰成
+		// 浅色主题），并把相邻两层的色距抬到 8——低于这个值时投影/边框仍是唯一分隔。
+		expect(luminance(theme.dark.background), "深色画布被压得太黑").toBeGreaterThanOrEqual(0.0075);
+		expect(luminance(theme.dark.background), "深色画布提得太亮").toBeLessThanOrEqual(0.02);
 		for (let index = 1; index < steps.length; index += 1) {
-			expect(distance(steps[index - 1], steps[index])).toBeGreaterThanOrEqual(6);
+			expect(distance(steps[index - 1], steps[index])).toBeGreaterThanOrEqual(8);
 		}
 	});
 
 	it("浅色与深色的表面不是同一层阶梯", () => {
 		expect(distance(theme.light.background, theme.dark.background)).toBeGreaterThan(120);
+	});
+
+	it("浅色的四层表面彼此拉得开", () => {
+		// 浅色曾经被读成“一大块米白纯色”：层级差只有 6–8 时，卡面与画布在低亮度屏上
+		// 几乎同色。12 是肉眼在常见亮度下能稳定分辨的下限。
+		const steps = [theme.light.secondary, theme.light.muted, theme.light.background, theme.light.card];
+		for (let index = 1; index < steps.length; index += 1) {
+			expect(distance(steps[index - 1], steps[index])).toBeGreaterThanOrEqual(12);
+		}
 	});
 
 	const readable: ReadonlyArray<[keyof ThemeColorTokens, keyof ThemeColorTokens, number]> = [

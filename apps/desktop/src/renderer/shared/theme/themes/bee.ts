@@ -7,31 +7,37 @@ import { defaultTheme } from "./default";
 // 表面是米黄到暖灰的四级台阶，画布不再是纯白——否则整套主题只剩一个按钮颜色。
 // 深色画布压到近黑的暖棕，卡面提亮。chart 取蜜黄同族色，深色下不刺眼。
 // 深色表面往蜜金偏：与羊皮纸（赭红）刻意分色相，两套暖色主题不会混在一起。
+//
+// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.0075–0.02，
+// 深色相邻表面 RGB 距离 ≥8；浅色四层表面彼此 ≥12。
+// 深色原先压到过 0.0059——黑到没有光感，侧栏、卡面、画布糊成一片，看不出层次；
+// 浅色原先只靠“卡面比画布亮一点点”做层次，四层都落在同一档米白里，读上去像一块布。
+// 所以深色抬亮画布（现 0.0089），浅色改成向下逐级压暗拉开层差。
 
 const PRIMARY_LIGHT = "#14120c";
 const PRIMARY_DARK = "#e0c65c";
 const PRIMARY_FG_LIGHT = "#faf5e7";
 const PRIMARY_FG_DARK = "#14120c";
 
-const LIGHT_BG = "#fcf5da";
+const LIGHT_BG = "#f9efc9";
 const LIGHT_FG = "#1e1a0e";
-const LIGHT_CARD = "#fffdf4";
-const LIGHT_MUTED = "#f7edd2";
-const LIGHT_SECONDARY = "#f0e4c4";
+const LIGHT_CARD = "#fffdf0";
+const LIGHT_MUTED = "#f4e8c0";
+const LIGHT_SECONDARY = "#ecdcae";
 const LIGHT_ACCENT = "#f7eed8";
-const LIGHT_BORDER = "#ddd0ae";
-const LIGHT_INPUT = "#eadeb9";
-const LIGHT_MUTED_FG = "#645b4b";
+const LIGHT_BORDER = "#d5c48f";
+const LIGHT_INPUT = "#e5d5a2";
+const LIGHT_MUTED_FG = "#5b5240";
 
-const DARK_BG = "#131208";
+const DARK_BG = "#1a1809";
 const DARK_FG = "#f0e9d6";
-const DARK_CARD = "#1e1b0b";
-const DARK_POPOVER = "#24200e";
-const DARK_MUTED = "#181608";
-const DARK_SECONDARY = "#292412";
-const DARK_ACCENT = "#322c15";
-const DARK_BORDER = "#403719";
-const DARK_INPUT = "#4a401f";
+const DARK_CARD = "#29250f";
+const DARK_POPOVER = "#302b12";
+const DARK_MUTED = "#211e0c";
+const DARK_SECONDARY = "#332e17";
+const DARK_ACCENT = "#3a3419";
+const DARK_BORDER = "#4b4222";
+const DARK_INPUT = "#554b28";
 const DARK_MUTED_FG = "#a19678";
 
 export const beeTheme: ThemeDef = {

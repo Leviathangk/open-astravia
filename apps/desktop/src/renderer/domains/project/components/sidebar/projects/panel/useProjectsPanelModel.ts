@@ -1,5 +1,6 @@
 import { useBatchTasks } from "@domains/batch-tasks/hooks/useBatchTasks";
 import { notifyTeamSessionsChanged } from "@shared/agent-teams/team-session-events";
+import { decodeNewSessionCwd, newSessionTarget } from "@shared/app-shell/new-session-route";
 import { pathBasename } from "@shared/lib/utils";
 import type { SessionInfo } from "@shared/store/atoms";
 import {
@@ -14,7 +15,7 @@ import {
 	inlineFilePreviewAtom,
 	pendingSessionOpenAtom,
 } from "@shared/store/atoms";
-import { useMatches, useNavigate } from "@tanstack/react-router";
+import { useMatches, useNavigate, useSearch } from "@tanstack/react-router";
 import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { selectAtom } from "jotai/utils";
 import { useCallback, useEffect, useMemo, useRef } from "react";
@@ -77,8 +78,15 @@ export function useProjectsPanelModel({
 		| { path?: string; cwd?: string; sessionId?: string }
 		| undefined;
 	const viewerSessionPath = routeParams?.path ? decodeURIComponent(routeParams.path) : "";
-	/** `/project/$cwd` 与 `/new-session/$cwd` 的参数值本身是编码过的（见导航处的 encodeURIComponent）。 */
-	const routeCwd = routeParams?.cwd ? decodeURIComponent(routeParams.cwd) : "";
+	const newSessionSearchCwd = useSearch({ strict: false }) as { cwd?: string };
+	/**
+	 * `/project/$cwd` 的参数值本身是编码过的（见导航处的 encodeURIComponent）；
+	 * 新会话页则把 cwd 放在 search 上，没有 `$cwd` 路径参数。两者都要落到同一个「当前路由
+	 * 属于哪个项目」上，否则项目被移除时守卫认不出还停在该项目的新会话页。
+	 */
+	const routeCwd = routeParams?.cwd
+		? decodeURIComponent(routeParams.cwd)
+		: (decodeNewSessionCwd(newSessionSearchCwd.cwd) ?? "");
 	const routeActiveTeamSessionId =
 		currentPath.startsWith("/agent-teams/") && routeParams?.sessionId
 			? decodeURIComponent(routeParams.sessionId)
@@ -180,7 +188,7 @@ export function useProjectsPanelModel({
 
 	const newSession = useCallback(
 		(cwd: string) => {
-			void navigate({ to: "/new-session/$cwd", params: { cwd: encodeURIComponent(cwd) } });
+			void navigate(newSessionTarget(cwd));
 		},
 		[navigate],
 	);
@@ -275,7 +283,7 @@ export function useProjectsPanelModel({
 				if (!wasActive) return;
 				setActiveSession(null);
 				if (currentPath === "/") {
-					void navigate({ to: "/new-session/$cwd", params: { cwd: encodeURIComponent(projectCwd) } });
+					void navigate(newSessionTarget(projectCwd));
 				}
 			};
 			const batchMatch = batchProjects.find((project) =>
@@ -323,7 +331,7 @@ export function useProjectsPanelModel({
 			});
 			if (clearActiveSession) setActiveSession(null);
 			if (navigation.kind === "new-session") {
-				void navigate({ to: "/new-session/$cwd", params: { cwd: encodeURIComponent(navigation.cwd) } });
+				void navigate(newSessionTarget(navigation.cwd));
 				return;
 			}
 			if (navigation.kind === "home") void navigate({ to: "/" });
@@ -404,10 +412,7 @@ export function useProjectsPanelModel({
 					removePinnedSessions(removedPaths);
 					if (removedPaths.has(activeSessionPathValue) || (activeSessionCwd === cwd && !removedPaths.size)) {
 						setActiveSession(null);
-						void navigate({
-							to: "/new-session/$cwd",
-							params: { cwd: encodeURIComponent(cwd) },
-						});
+						void navigate(newSessionTarget(cwd));
 					}
 					await loadSessions(cwd);
 				},
@@ -440,10 +445,7 @@ export function useProjectsPanelModel({
 					removePinnedSessions(removedPaths);
 					if (removedPaths.has(activeSessionPathValue)) {
 						setActiveSession(null);
-						void navigate({
-							to: "/new-session/$cwd",
-							params: { cwd: encodeURIComponent(cwd) },
-						});
+						void navigate(newSessionTarget(cwd));
 					}
 					if (imCwd) await loadSessions(imCwd);
 				},

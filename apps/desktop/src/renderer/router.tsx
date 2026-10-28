@@ -243,11 +243,16 @@ const newSessionRoute = createRoute({
 	component: NewSessionPage,
 });
 
+/**
+ * 旧深链兼容：`/new-session/<编码后的 cwd>` 重定向到规范路由。
+ * 应用内跳转已统一走 `new-session-route.ts`，这里只接外部进来的链接。
+ * `replace` 必须为真：否则每次重定向都会在历史里多压一条，返回键要按两次才回得去。
+ */
 const legacyNewSessionRoute = createRoute({
 	getParentRoute: () => rootRoute,
 	path: "/new-session/$cwd",
 	beforeLoad: ({ params }) => {
-		throw redirect({ to: "/new-session", search: { cwd: params.cwd } });
+		throw redirect({ to: "/new-session", search: { cwd: params.cwd }, replace: true });
 	},
 });
 

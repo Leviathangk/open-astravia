@@ -2,6 +2,7 @@ import type { ConversationScenario } from "@astravia-org/plugin-sdk";
 import { useProjectActions } from "@domains/project/hooks/useProjects";
 import { applyActiveTagFilterToNewConversation } from "@domains/project/services/new-conversation-tagging";
 import type { DesktopSessionAttachmentSnapshot } from "@preload/api";
+import { newSessionTarget } from "@shared/app-shell/new-session-route";
 import { i18n } from "@shared/i18n";
 import { waitForCommittedPaint } from "@shared/lib/committed-paint";
 import { perfSendMark } from "@shared/lib/perf-send";
@@ -386,10 +387,7 @@ export function useSessionOpener(): SessionOpenerController {
 					} catch (restoreError) {
 						console.error("[useSessionOpener] staged input restore failed:", restoreError);
 					}
-					void navigate({
-						to: "/new-session/$cwd",
-						params: { cwd: encodeURIComponent(cwd) },
-					});
+					void navigate(newSessionTarget(cwd));
 				} else if (shouldNavigate) {
 					// 主机已不在列表里的远程项目，退回欢迎页等于把人扔在一个看不出原因的地方；
 					// 带回这个项目的新会话页，那里会换成「重新绑定主机」的卡片。

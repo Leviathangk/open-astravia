@@ -13,6 +13,11 @@ vi.mock("../domains/abilities/components/AbilitiesPage", () => {
 	return { AbilitiesPage: () => null };
 });
 
+// 新会话页也在空闲预取列表里。这里只是要证明「空闲后确实拉了一个入口模块」，
+// 不需要真的求值整张会话页依赖图——那会让本用例的耗时取决于无关模块的编译量，
+// 并行跑全量时容易撞上 5s 超时。
+vi.mock("../domains/conversation/components/NewSessionPage", () => ({ NewSessionPage: () => null }));
+
 afterEach(() => {
 	cleanup();
 	vi.restoreAllMocks();

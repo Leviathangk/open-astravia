@@ -158,6 +158,34 @@ describe("Agent Team collaboration contracts", () => {
 			}),
 		).toMatchObject({ category: "network", retryability: "automatic" });
 	});
+	it("retries a member whose account pool is momentarily empty instead of failing it", () => {
+		// 上游把「分不到账号」报成不可重试：成员会话会直接停在 non-retryable-failure，
+		// 对话一长就不再回复。它是容量问题，要回到 automatic 重试语义。
+		expect(
+			classifyTeamExecutionIssue({
+				code: "AI_TRANSPORT_FAILED",
+				message: "No available accounts",
+				retryable: false,
+				origin: "provider",
+				details: { modelId: "gpt-5", retryAfterMs: 1_500 },
+			}),
+		).toMatchObject({
+			category: "provider-unavailable",
+			retryability: "automatic",
+			retryAfter: 1_500,
+			modelId: "gpt-5",
+		});
+		// 容量类文案不能抢在鉴权 / 配额前面：真正需要人工介入的错误照旧不自动重试。
+		expect(
+			classifyTeamExecutionIssue({
+				code: "AI_BILLING_REQUIRED",
+				message: "No available accounts",
+				retryable: true,
+				origin: "provider",
+			}),
+		).toMatchObject({ category: "insufficient-credit", retryability: "after-external-change" });
+	});
+
 	it("matches external changes by retry policy and the available provider identity", () => {
 		const issue: TeamExecutionIssue = {
 			category: "authentication",

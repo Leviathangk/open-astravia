@@ -214,6 +214,24 @@ describe("team chat stream state", () => {
 			1,
 		);
 	});
+	it("drops the AIError name so a provider rejection reads as plain text", () => {
+		const items = placeTeamErrorInTimeline(
+			[],
+			{
+				message: "Error invoking remote method 'astravia:agent-teams:send-message': AIError: No available accounts",
+				turnId: "pool-empty",
+				authorId: "leader",
+			},
+			"leader",
+		);
+
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({
+			phase: "failed",
+			blocks: [expect.objectContaining({ type: "error", text: "No available accounts", kind: "server" })],
+		});
+	});
+
 	it("shows the submitted message and leader immediately before the session snapshot arrives", () => {
 		const items = projectTeamConversationTimeline({
 			snapshot: undefined,

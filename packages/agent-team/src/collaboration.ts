@@ -433,6 +433,19 @@ export function classifyTeamExecutionIssue(failure: RuntimeFailure): TeamExecuti
 			...(retryAfter === undefined ? {} : { retryAfter }),
 		};
 	}
+	// 账号池暂时分不到账号：请求本身没问题，池子回补后同一个请求就能跑。上游把这类
+	// 错误报成“不可重试”时必须在这里纠正，否则成员会话会直接停在 non-retryable-failure，
+	// 用户看到的就是“对话一长就不再回复”。
+	const capacityText = `${code} ${failure.message ?? ""}`.toLowerCase();
+	if (/no available accounts?|no accounts? available|account.?pool|no available capacity/.test(capacityText)) {
+		return {
+			category: "provider-unavailable",
+			retryability: "automatic",
+			code: failure.code,
+			...identity,
+			...(retryAfter === undefined ? {} : { retryAfter }),
+		};
+	}
 	if (/(network|timeout|timed.?out|connection|econn)/.test(code)) {
 		return {
 			category: "network",

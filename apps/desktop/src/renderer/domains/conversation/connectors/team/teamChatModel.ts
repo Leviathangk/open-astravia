@@ -769,7 +769,9 @@ export function placeTeamErrorInTimeline(
 	leaderMemberId: string,
 ): ChatConversationItem[] {
 	if (!error) return [...items];
-	const text = error.message.replace(/^Error invoking remote method '[^']+': Error: /u, "");
+	// Electron 会把 IPC 抛出的错误重写成 “Error invoking remote method '…': <名字>: <正文>”。
+	// 名字不只有 Error，provider 侧是 AIError——只剥 Error 会让卡片里留着 “AIError: ”。
+	const text = error.message.replace(/^Error invoking remote method '[^']+': (?:Error|AIError): /u, "");
 	const block = {
 		type: "error" as const,
 		id: `team:error:${error.turnId ?? "operation"}`,

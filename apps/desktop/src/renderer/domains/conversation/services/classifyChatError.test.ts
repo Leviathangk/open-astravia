@@ -9,7 +9,7 @@ import { type ChatErrorKind, classifyChatError } from "./classifyChatError";
 const RETRY_CONTROLLER_NON_RETRYABLE =
 	/额度已用尽|额度不足|窗口额度|余额不足|Token Plan|insufficient.?quota|insufficient.?balance|quota.?exhausted|quota.?exceeded|out of quota|exceeded your current quota/i;
 const RETRY_CONTROLLER_RETRYABLE =
-	/overloaded|rate.?limit|too many requests|no capacity available|model.?capacity.?exhausted|429|500|502|503|504|service.?unavailable|server error|internal error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|terminated|retry delay|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|EHOSTUNREACH|ENETUNREACH/i;
+	/overloaded|rate.?limit|too many requests|no capacity available|model.?capacity.?exhausted|no available accounts?|no accounts? available|account.?pool|429|500|502|503|504|service.?unavailable|server error|internal error|connection.?error|connection.?refused|other side closed|fetch failed|upstream.?connect|reset before headers|terminated|retry delay|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE|EHOSTUNREACH|ENETUNREACH/i;
 
 function isRetryableByController(text: string): boolean {
 	if (RETRY_CONTROLLER_NON_RETRYABLE.test(text)) return false;
@@ -37,6 +37,8 @@ const SAMPLES: ReadonlyArray<{ text: string; kind: ChatErrorKind }> = [
 		kind: "server",
 	},
 	{ text: "upstream connect error or disconnect/reset before headers", kind: "server" },
+	// 账号池暂时分不到账号：能等，不是配额，也不是鉴权
+	{ text: "AIError: No available accounts", kind: "server" },
 	// network
 	{ text: "TypeError: fetch failed", kind: "network" },
 	{ text: "connect ECONNREFUSED 127.0.0.1:8080", kind: "network" },

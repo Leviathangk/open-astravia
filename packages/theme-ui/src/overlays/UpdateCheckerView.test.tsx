@@ -56,14 +56,16 @@ describe("UpdateCheckerDetail", () => {
 		expect(html).not.toContain("**内置浏览器");
 	});
 
-	it("clamps the note to a fixed height so it cannot cover the rows below", () => {
+	it("keeps the note inside its own scroll box so it cannot cover the rows below", () => {
 		const html = renderDetail(FEED_HTML);
 
 		expect(html).toContain("max-height:240px");
-		// 裁切必须落在 style 上。`.markdown-body` 在 styles.css 里以非分层规则写了
+		// 滚动容器必须落在 style 上。`.markdown-body` 在 styles.css 里以非分层规则写了
 		// `overflow: visible`，它胜过 Tailwind 分层工具类的 `overflow-hidden`；只靠工具类时
 		// 长说明会溢出 240px 的盒子、盖住下面的「启动 App 引导」行（0.5.78 实机现形）。
-		expect(html).toContain("overflow:hidden");
+		// 用 auto 而非 hidden：说明再长也停在盒子里自己滚，读得完又盖不住下面。
+		expect(html).toContain("overflow-y:auto");
+		expect(html).toContain("overflow-x:hidden");
 	});
 
 	it("exports the release-note normaliser through the package barrel", () => {

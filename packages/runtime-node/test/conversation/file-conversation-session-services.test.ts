@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MessageAppendedEvent, TurnCompletedEvent, TurnStartedEvent } from "@astravia/runtime-core/kernel";
@@ -153,6 +153,50 @@ describe("Greenfield runtime session services", () => {
 
 		await expect(catalog.deleteSessionArtifacts(sessionPath)).rejects.toThrow("artifact cleanup failed");
 		expect(existsSync(sessionPath)).toBe(true);
+	});
+
+	it("keeps a session listed while another writer is still appending its last record", async () => {
+		const rootDir = await createTemporaryRoot();
+		const cwd = join(rootDir, "workspace");
+		const repository = new FileConversationRepository({ rootDir });
+		await repository.create({ sessionId: "streaming", createdAt: 100, cwd });
+		await repository.append("streaming", 0, [
+			started("streaming", 100),
+			userMessage("streaming", "半写完的一轮", 110),
+		]);
+		const sessionPath = repository.resolveConversationPath("streaming");
+		await repository.close();
+
+		// 追写中的数据只落在缓冲区一半：文件末尾缺换行与右花括号。
+		// 写作侧必须拒绝这种文件，但列表不能因此把会话从侧栏藏起来。
+		const complete = await readFile(sessionPath, "utf8");
+		await writeFile(sessionPath, `${complete}{"recordType":"conversation.event","schemaVer`);
+
+		const sessions = await new FileConversationRuntimeSessionCatalog().listSessions(cwd, rootDir);
+
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0]).toEqual(expect.objectContaining({ id: "streaming", firstMessage: "半写完的一轮" }));
+	});
+
+	it("falls back to the file header instead of dropping a session whose body cannot be parsed", async () => {
+		const rootDir = await createTemporaryRoot();
+		const cwd = join(rootDir, "workspace");
+		const repository = new FileConversationRepository({ rootDir });
+		await repository.create({ sessionId: "damaged", createdAt: 100, cwd });
+		await repository.append("damaged", 0, [started("damaged", 100), userMessage("damaged", "hello", 110)]);
+		const sessionPath = repository.resolveConversationPath("damaged");
+		await repository.close();
+
+		// 头部完好、正文里有一行真坏了的记录：标题读不出来，但会话必须还在。
+		const lines = (await readFile(sessionPath, "utf8")).split("\n");
+		await writeFile(sessionPath, `${lines[0]}\n{not json}\n`);
+
+		const sessions = await new FileConversationRuntimeSessionCatalog().listSessions(cwd, rootDir);
+
+		expect(sessions).toHaveLength(1);
+		expect(sessions[0]).toEqual(
+			expect.objectContaining({ id: "damaged", path: sessionPath, cwd, firstMessage: "(no messages)" }),
+		);
 	});
 
 	it("rejects lifecycle writes while another process-lifetime owner holds the conversation", async () => {

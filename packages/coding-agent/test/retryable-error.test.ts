@@ -13,6 +13,11 @@ describe("runtime failure classification", () => {
 		expect(classifyRuntimeFailure(new Error(message))).toBe(expected);
 	});
 
+	it("treats a momentarily empty provider account pool as transient", () => {
+		// 网关上游分不到账号时回的是这句话；它不是用户请求的错，池子回补后同一请求能跑。
+		expect(classifyRuntimeFailure(new Error("AIError: No available accounts"))).toBe("transient");
+	});
+
 	it("keeps quota exhaustion non-retryable", () => {
 		expect(isRetryableRuntimeError("429 insufficient_quota: exceeded your current quota")).toBe(false);
 	});

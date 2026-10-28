@@ -21,6 +21,8 @@ import { FileConversationRepository } from "./file-conversation-repository.js";
 import { nodeErrorCode } from "./node-error-code.js";
 
 const CONVERSATION_FILE_SUFFIX = ".conversation.jsonl";
+/** 与 renderer 的 NO_MESSAGES_SENTINEL 同值：那里靠它判定“还没取到可用标题”。 */
+const NO_MESSAGES_PLACEHOLDER = "(no messages)";
 const CONVERSATION_HEADER_READ_BYTES = 64 * 1024;
 const LAST_MESSAGE_PREVIEW_LENGTH = 120;
 
@@ -155,7 +157,11 @@ export class FileConversationRuntimeSessionCatalog implements RuntimeSessionCata
 						// 文件真的没了才是删除了。其它失败（比如另一写入者正在替换/追写，这一趟读不出完整文件）
 						// 只是暂时读不到：返回上一次的结果，否则会话会从侧栏凭空消失。
 						if (nodeErrorCode(error) === "ENOENT") return undefined;
-						return sessionInfoCache.get(sessionInfoCacheKey(resolve(sessionPath), cwd))?.info;
+						const cached = sessionInfoCache.get(sessionInfoCacheKey(resolve(sessionPath), cwd))?.info;
+						if (cached) return cached;
+						// 冷启动时还没有缓存：退到“只读文件头”的降级结果，而不是把会话藏起来。
+						// 侧栏宁可少一条预览，也不能让用户以为会话被删了。
+						return readDegradedSessionHistoryInfo(sessionPath, cwd);
 					}
 				}),
 		);
@@ -222,7 +228,10 @@ async function readSessionHistoryInfo(sessionPath: string, fallbackCwd: string):
 	if (!header || !isCanonicalConversationPath(sessionPath, header.sessionId)) {
 		throw new Error(`Unsupported native conversation file: ${sessionPath}`);
 	}
-	const document = documentFromFile(header.sessionId, parseConversationFile(text, header.sessionId));
+	const document = documentFromFile(
+		header.sessionId,
+		parseConversationFile(dropIncompleteTail(text), header.sessionId),
+	);
 	const history = projectConversationDocumentHistory(document);
 	const conversationMessages = history.flatMap((entry) => {
 		if (entry.type !== "message" || (entry.message.role !== "user" && entry.message.role !== "assistant")) {
@@ -234,7 +243,7 @@ async function readSessionHistoryInfo(sessionPath: string, fallbackCwd: string):
 		const text = extractMessageText(message.content);
 		return text ? [{ role: message.role, text }] : [];
 	});
-	const firstMessage = messageTexts.find(({ role }) => role === "user")?.text ?? "(no messages)";
+	const firstMessage = messageTexts.find(({ role }) => role === "user")?.text ?? NO_MESSAGES_PLACEHOLDER;
 	const lastMessagePreview = messageTexts.at(-1)?.text.slice(0, LAST_MESSAGE_PREVIEW_LENGTH);
 	// File mtime is a storage implementation detail: importing/resuming an existing
 	// conversation may rewrite or recover the JSONL without any new user activity.
@@ -257,6 +266,52 @@ async function readSessionHistoryInfo(sessionPath: string, fallbackCwd: string):
 		parentSessionPath: document.identity.parentSessionPath,
 		parentEntryId: document.identity.parentEntryId,
 	};
+}
+
+/**
+ * 真读不出完整内容时的降级结果：只靠文件头 + mtime 让会话留在列表里。
+ *
+ * 侧栏里一条带旧标题的会话，和一条彻底消失的会话，对用户的含义完全不同——后者看起来
+ * 就是数据丢了。所以宁可只给文件名和时间，也不返回 undefined。
+ */
+async function readDegradedSessionHistoryInfo(
+	sessionPath: string,
+	fallbackCwd: string,
+): Promise<SessionHistoryInfo | undefined> {
+	try {
+		const header = await readConversationHeader(sessionPath);
+		if (!header || !isCanonicalConversationPath(sessionPath, header.sessionId)) return undefined;
+		// v1 文件头只有 sessionId/createdAt：身份与父子关系只在 v2 头上才有。
+		const agentId = "agentId" in header ? header.agentId : undefined;
+		const cwd = "cwd" in header ? header.cwd : undefined;
+		const parentSessionPath = "parentSessionPath" in header ? header.parentSessionPath : undefined;
+		const parentEntryId = "parentEntryId" in header ? header.parentEntryId : undefined;
+		const info: SessionHistoryInfo = {
+			id: header.sessionId,
+			path: resolve(sessionPath),
+			...(agentId === undefined ? {} : { agentId }),
+			cwd: cwd ?? fallbackCwd,
+			firstMessage: NO_MESSAGES_PLACEHOLDER,
+			modifiedAt: header.createdAt,
+			...(parentSessionPath === undefined ? {} : { parentSessionPath }),
+			...(parentEntryId === undefined ? {} : { parentEntryId }),
+		};
+		return info;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * 写手正在追写时，读到的最后一行可能只有半个 JSON。
+ *
+ * 丢掉这个未写完的尾巴，是“本趟读不出完整文件”与“文件真的坏了”之间的分界线。
+ * 严格校验仍然是写入侧的规则（半行必须被抓到），列表这里只需要能看见会话。
+ */
+function dropIncompleteTail(text: string): string {
+	if (text.length === 0 || text.endsWith("\n")) return text;
+	const lastNewline = text.lastIndexOf("\n");
+	return lastNewline === -1 ? text : text.slice(0, lastNewline + 1);
 }
 
 function extractMessageText(content: unknown): string | undefined {

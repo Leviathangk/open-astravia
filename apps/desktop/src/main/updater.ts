@@ -14,6 +14,7 @@ import {
 	resolveInnoUpdateStoreRoot,
 } from "./inno-windows-update.js";
 import { handOffToInstaller, MACOS_SHIPIT_JOB_LABEL } from "./mac-installer-handoff.js";
+import { isUnsignedMacBundle } from "./mac-unsigned-installer.js";
 import { runQuitCleanup } from "./quit-cleanup.js";
 import { markPendingUpdateRelaunch } from "./update-relaunch-marker.js";
 import { ElectronUpdaterEngine } from "./updater-engine.js";
@@ -114,10 +115,39 @@ const finalizeQuit = async () => {
 	}
 	app.exit(0);
 };
-const updaterEngine = new ElectronUpdaterEngine(autoUpdater, innoWindowsUpdate, nativeMacUpdateEvents, {
-	prepare: prepareQuit,
-	finalize: finalizeQuit,
-});
+/**
+ * 未签名（adhoc / linker-signed）包不能交给 Squirrel.Mac：它替换前会用当前包的
+ * 指定要求校验新包，而这类包连 CodeResources 都不完整，校验必然失败。此时改走
+ * 内置安装器（解包 + 原地替换），否则用户点多少次「更新」都停在同一个版本。
+ */
+function resolveMacBundlePath(): string {
+	// `getAppPath()` 在打包后指向 `Contents/Resources/app.asar`，不是 bundle 本身。
+	// 可执行文件固定是 `Contents/MacOS/<name>`，向上三级才是 `<name>.app`。
+	return dirname(dirname(dirname(app.getPath("exe"))));
+}
+
+const macBundlePath = process.platform === "darwin" ? resolveMacBundlePath() : undefined;
+const macUnsignedInstall =
+	macBundlePath && app.isPackaged && isUnsignedMacBundle(macBundlePath)
+		? {
+				appPath: macBundlePath,
+				cacheRoot: join(homedir(), "Library", "Caches", "astravia-updater"),
+			}
+		: undefined;
+if (macUnsignedInstall) {
+	console.info("[updater] this build is unsigned; macOS updates will use the built-in installer");
+}
+
+const updaterEngine = new ElectronUpdaterEngine(
+	autoUpdater,
+	innoWindowsUpdate,
+	nativeMacUpdateEvents,
+	{
+		prepare: prepareQuit,
+		finalize: finalizeQuit,
+	},
+	macUnsignedInstall,
+);
 // powerMonitor 只能在 app ready 之后订阅，因此这里只传订阅函数，
 // 由 UpdaterService.onAppReady() 在合适的时机调用。
 const systemEvents = {

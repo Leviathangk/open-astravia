@@ -27,6 +27,26 @@ describe("resolveProjectGoneCleanup", () => {
 		expect(result.navigation).toEqual({ kind: "new-session", cwd: DEFAULT_CONVERSATION });
 	});
 
+	it("规范新会话地址（cwd 在 search 上）同样算停在该项目的新会话页", () => {
+		const result = resolveProjectGoneCleanup(
+			PROJECT,
+			[],
+			context({ currentPath: "/new-session", routeCwd: PROJECT }),
+		);
+
+		expect(result.navigation).toEqual({ kind: "new-session", cwd: DEFAULT_CONVERSATION });
+	});
+
+	it("规范新会话地址指着别的项目时原地不动", () => {
+		const result = resolveProjectGoneCleanup(
+			PROJECT,
+			[],
+			context({ currentPath: "/new-session", routeCwd: "/Users/me/.astravia/workspace/B" }),
+		);
+
+		expect(result).toEqual({ clearActiveSession: false, navigation: { kind: "stay" } });
+	});
+
 	it("停在被删项目的详情页时同样跳走", () => {
 		const result = resolveProjectGoneCleanup(PROJECT, [], context({ currentPath: "/project/x", routeCwd: PROJECT }));
 

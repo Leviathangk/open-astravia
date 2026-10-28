@@ -23,6 +23,9 @@ const FEED_HTML =
 
 const notesMarkdown = "## 新增\n\n- **内置浏览器可以从标签页菜单添加了**：现在它按普通面板参与可见性解析。";
 
+// 两节各一条与两条，用来验证序号按小节重排，而不是整篇连续编号。
+const SECTIONED_NOTE = "## 新增\n\n- **甲**：一。\n- **乙**：二。\n\n## 修复\n\n- **丙**：三。";
+
 function renderDetail(releaseNote: string): string {
 	return renderToStaticMarkup(
 		<UpdateCheckerDetail
@@ -41,9 +44,9 @@ describe("UpdateCheckerDetail", () => {
 	it("renders the release note html as structured text instead of showing the tags", () => {
 		const html = renderDetail(FEED_HTML);
 
-		expect(html).toContain("<h2");
-		expect(html).toContain("<strong>内置浏览器可以从标签页菜单添加了</strong>");
-		expect(html).toContain("<li>");
+		expect(html).toContain(">新增<");
+		expect(html).toContain("内置浏览器可以从标签页菜单添加了");
+		expect(html).toContain("现在它按普通面板参与可见性解析。");
 		expect(html).not.toContain("&lt;h2&gt;");
 		expect(html).not.toContain("&lt;ul&gt;");
 	});
@@ -51,21 +54,39 @@ describe("UpdateCheckerDetail", () => {
 	it("renders the markdown release notes the same way", () => {
 		const html = renderDetail(notesMarkdown);
 
-		expect(html).toContain("<h2");
-		expect(html).toContain("<strong>内置浏览器可以从标签页菜单添加了</strong>");
+		expect(html).toContain(">新增<");
+		expect(html).toContain("内置浏览器可以从标签页菜单添加了");
 		expect(html).not.toContain("**内置浏览器");
+		expect(html).not.toContain("## ");
+	});
+
+	it("separates the lead-in title from the body so the two read as different levels", () => {
+		const html = renderDetail(FEED_HTML);
+
+		// 标题是分行的一块加粗文字，正文是它下面的段落：两者不能挤成一段。
+		expect(html).toMatch(/font-medium[^"]*">内置浏览器可以从标签页菜单添加了<\/div>/u);
+		expect(html).toMatch(/<p class="[^"]*">现在它按普通面板参与可见性解析。<\/p>/u);
+	});
+
+	it("numbers the items and restarts the numbering for every section", () => {
+		const html = renderDetail(SECTIONED_NOTE);
+
+		expect(html.match(/>1<\/span>/gu)).toHaveLength(2);
+		expect(html.match(/>2<\/span>/gu)).toHaveLength(1);
+		expect(html).not.toContain(">3</span>");
 	});
 
 	it("keeps the note inside its own scroll box so it cannot cover the rows below", () => {
 		const html = renderDetail(FEED_HTML);
 
 		expect(html).toContain("max-height:240px");
+		expect(html).toContain("overflow-y:auto");
+		expect(html).toContain("overflow-x:hidden");
 		// 滚动容器必须落在 style 上。`.markdown-body` 在 styles.css 里以非分层规则写了
 		// `overflow: visible`，它胜过 Tailwind 分层工具类的 `overflow-hidden`；只靠工具类时
 		// 长说明会溢出 240px 的盒子、盖住下面的「启动 App 引导」行（0.5.78 实机现形）。
 		// 用 auto 而非 hidden：说明再长也停在盒子里自己滚，读得完又盖不住下面。
-		expect(html).toContain("overflow-y:auto");
-		expect(html).toContain("overflow-x:hidden");
+		expect(html).toContain("border-radius:8px;overflow:hidden");
 	});
 
 	it("exports the release-note normaliser through the package barrel", () => {

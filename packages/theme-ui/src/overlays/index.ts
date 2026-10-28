@@ -26,7 +26,8 @@ export type {
 	RouteErrorPageViewProps,
 } from "./RouteErrorPageView";
 export { RouteErrorPageView } from "./RouteErrorPageView";
-export { normalizeReleaseNote } from "./release-note";
+export type { ReleaseNoteItem, ReleaseNoteOutline, ReleaseNoteSection } from "./release-note";
+export { normalizeReleaseNote, outlineReleaseNote } from "./release-note";
 export type {
 	ToasterItemView,
 	ToasterVariant,

@@ -50,13 +50,14 @@ code has no resources but signature indicates they must be present
 
 - `nativeMacReadiness` 只在没有走内置通道时创建；
 - `autoInstallOnAppQuit` 置假，避免退出时 Squirrel 再试一次、再失败一次；
-- 下载 promise 的 reject 分支里，若 ZIP 已在 electron-updater 的 `pending` 目录落盘（哈希已由 `executeDownload` 校验），把这次失败当作「暂存阶段失败」而不是「下载失败」，返回该 ZIP 路径。
+- 下载 promise **成功结算时也认领**：Squirrel 的拒绝有两种到达方式——`downloadUpdate` reject（reject 分支接），以及只发一个 `error` 事件、promise 照常 resolve。只处理前者时 ZIP 从未被认领，`quitAndInstall()` 就会退回那条对未签名包必然失败的 Squirrel 路径，表现为进度 100%、进程退出、重开仍旧版本且无报错。因此认领动作前移到成功分支首行（`macPendingArchive ??= await findPendingArchive()`）。
+- reject 分支保留：ZIP 已在 electron-updater 的 `pending` 目录落盘（哈希已由 `executeDownload` 校验）时，把这次失败当作「暂存阶段失败」而不是「下载失败」，返回该 ZIP 路径。
 
 pending 目录里先按清单资产名找；清单同时列出 x64 与 arm64 两个 ZIP 时 `files[0]` 未必是本机下载的那个，退到「目录里最新的 `.zip`」。
 
 ### 安装阶段
 
-`quitAndInstall()` 先跑原有的 `prepare`（标记 isQuitting + 退出清理），随后若已有待安装 ZIP，则写一个安装脚本并以 `detached` 方式启动，**不**调用 `updater.quitAndInstall`。脚本五步，顺序即正确性：
+`quitAndInstall()` 先认领并校验待安装 ZIP，**校验通过后才**跑原有的 `prepare`（标记 isQuitting + 退出清理），随后写一个安装脚本并以 `detached` 方式启动，**不**调用 `updater.quitAndInstall`。校验必须排在 `prepare` 之前：`prepare` 已标记退出、写完重启标记并跑完退出清理，此时报错会把应用留在「清理已做、窗口已关、却还在运行」的半退出状态。未签名通道下找不到 ZIP 直接抛错，由 `UpdaterService.install()` 落成 `updater.errors.installFailed`——静默失败改为可见错误，**永不退回 Squirrel**。脚本五步，顺序即正确性：
 
 1. 等 PID 消失（`kill -0` 轮询，默认上限 120s，超时放弃）。运行中的 Mach-O 被覆盖会 `ETXTBSY`。
 2. `ditto -x -k --sequesterRsrc` 解包到 `mktemp -d` 的暂存目录，确认里面有 `.app`；归档根直接是 bundle 内容时（`ditto -c -k` 对 `.app` 的行为）把暂存目录本身当 bundle。
@@ -94,7 +95,7 @@ pending 目录里先按清单资产名找；清单同时列出 x64 与 arm64 两
 - `isUnsignedMacBundle` 对不存在的路径按平台判定；
 - 日志与脚本同目录。
 
-`updater-engine.test.ts` 补两例：Squirrel 拒绝未签名包时下载 promise 以 pending ZIP 结算、`quitAndInstall` 交给内置脚本而不是 `updater.quitAndInstall`；清单先列另一种架构时仍能定位到本机下载的 ZIP。红绿确认：把 reject 分支改回直接抛出，前一例必红（实测 `1 failed | 9 passed`）。
+`updater-engine.test.ts` 补四例：Squirrel 拒绝未签名包时下载 promise 以 pending ZIP 结算、`quitAndInstall` 交给内置脚本而不是 `updater.quitAndInstall`；清单先列另一种架构时仍能定位到本机下载的 ZIP；**Squirrel 只发 `error` 事件、promise 照常 resolve 时依然交给内置脚本**；**无待安装 ZIP 时 `quitAndInstall` 拒绝而不是退回 Squirrel**。红绿确认：把 reject 分支改回直接抛出，前一例必红（实测 `1 failed | 9 passed`）；去掉认领前的 `??=` 与判空抛错，新增的第二例必红（实测 `promise resolved "undefined" instead of rejecting`）。
 
 自动化只能覆盖到「脚本在临时目录里正确换包」。真实替换 `/Applications/Astravia.app` 属破坏性操作且会动到正在运行的应用，本轮**未**在本机执行；实机升级效果待下一次发版由用户确认。若失败，唯一证据是 `~/Library/Caches/astravia-updater/install-*.log`。
 

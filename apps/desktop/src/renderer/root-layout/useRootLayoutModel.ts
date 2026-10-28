@@ -14,6 +14,7 @@ import { useAppInit } from "../domains/conversation/hooks/useAppInit";
 import { useSessionManager } from "../domains/conversation/hooks/useSessionManager";
 import { useNotificationInit } from "../domains/message/hooks/useNotificationInit";
 import { useProjectActions } from "../domains/project/hooks/useProjects";
+import { newSessionTarget } from "../shared/app-shell/new-session-route";
 import { playNotificationSound } from "../shared/audio/notification-sound-player";
 import { useModelCatalogSync } from "../shared/hooks/useModelCatalogSync";
 import { useNarrowScreen } from "../shared/hooks/useNarrowScreen";
@@ -184,10 +185,7 @@ export function useRootLayoutModel(): RootLayoutModel {
 		) {
 			return;
 		}
-		void navigate({
-			to: "/new-session/$cwd",
-			params: { cwd: encodeURIComponent(defaultConversationCwd) },
-		});
+		void navigate(newSessionTarget(defaultConversationCwd));
 	}, [
 		currentPath,
 		activeSession,
@@ -257,10 +255,7 @@ export function useRootLayoutModel(): RootLayoutModel {
 				capturedAt: payload.capturedAt,
 			});
 			if (currentPath !== "/" && !currentPath.startsWith("/new-session") && defaultConversationCwd) {
-				void navigate({
-					to: "/new-session/$cwd",
-					params: { cwd: encodeURIComponent(defaultConversationCwd) },
-				});
+				void navigate(newSessionTarget(defaultConversationCwd));
 			}
 			store.set(focusInputRequestAtom, (previous) => previous + 1);
 		});
@@ -455,10 +450,7 @@ export function useRootLayoutModel(): RootLayoutModel {
 						// 默认走「对话」项目的 NewSession 页面；若主进程尚未返回 cwd，退回第一个项目。
 						const target = defaultCwdRef.current || projectsRef.current[0]?.cwd;
 						if (target) {
-							void navigate({
-								to: "/new-session/$cwd",
-								params: { cwd: encodeURIComponent(target) },
-							});
+							void navigate(newSessionTarget(target));
 						}
 						break;
 					}

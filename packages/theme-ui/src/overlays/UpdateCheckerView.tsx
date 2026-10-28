@@ -1,9 +1,7 @@
-import { useEffect, useRef, useState, type JSX } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { Button } from "@astravia-org/ui";
 
-import { normalizeReleaseNote } from "./release-note";
+import { outlineReleaseNote } from "./release-note";
 
 export interface UpdateCheckerViewLabels {
 	readonly check: string;
@@ -83,7 +81,7 @@ export function UpdateCheckerDetail({
 
 	return (
 		<div
-			className="space-y-2 rounded-lg border border-border bg-secondary p-3"
+			className="space-y-2 overflow-hidden rounded-lg border border-border bg-secondary p-3"
 			data-testid="updater-detail"
 			data-updater-phase={phase}
 		>
@@ -123,7 +121,7 @@ export function UpdateCheckerDetail({
 	);
 }
 
-// Line height ~1.5rem (24px) for 13px font text, 10 lines is ~240px
+// 说明区高度上限：约 10 行 12px 正文。超出部分在框内滚动，不撑开卡片。
 const MAX_HEIGHT_PX = 240;
 
 function ReleaseNotePreview({
@@ -137,9 +135,9 @@ function ReleaseNotePreview({
 }): JSX.Element {
 	const innerRef = useRef<HTMLDivElement>(null);
 	const [isOverflowing, setIsOverflowing] = useState(false);
-	// GitHub 的 feed 给 HTML，Release API 给 Markdown：统一成 Markdown 再渲染，
-	// 否则 HTML 会被当成纯文本原样显示。
-	const markdown = normalizeReleaseNote(releaseNote);
+	// 解析结果按原始文本缓存：outline 每次渲染都新建对象，会让下面的 effect 每轮重跑，
+	// 而那正是「Maximum update depth exceeded」的形状。依赖只钉在文本上。
+	const outline = useMemo(() => outlineReleaseNote(releaseNote), [releaseNote]);
 
 	useEffect(() => {
 		const el = innerRef.current;
@@ -156,35 +154,80 @@ function ReleaseNotePreview({
 		const observer = new ResizeObserver(measure);
 		observer.observe(el);
 		return () => observer.disconnect();
-	}, [markdown]);
+	}, [outline]);
 
 	return (
-		<div className="relative mt-2">
-			{/* 滚动/裁切必须写在 style 里。`.markdown-body` 在 styles.css 里以非分层规则声明了
+		// 外层负责「不越界」：卡片是圆角的，任何子节点都不能把自己的绘制溢出到圆角之外。
+		<div
+			className="mt-2"
+			data-testid="updater-release-note-frame"
+			style={{ borderRadius: "8px", overflow: "hidden" }}
+		>
+			{/* 滚动必须写在 style 里。`.markdown-body` 在 styles.css 里以非分层规则声明了
 			    `overflow: visible`（防 vibrancy 合成层裁剪正文），非分层规则胜过 Tailwind 分层
-			    工具类 —— 只写 `overflow-hidden` 会被它盖掉，长说明溢出 240px 的盒子、盖住下面
-			    的「启动 App 引导」行。只给 max-height 也不够：它管布局高度，不管绘制。
-			    用 auto 而不是 hidden：说明再长也停在盒子里自己滚，不必先点「查看更多」才能读完。 */}
+			    工具类 —— 只写 `overflow-hidden` 会被它盖掉。这里不再借用 .markdown-body，
+			    但内联 style 仍然保留：以后谁把类名改回去，裁剪也不会跟着没了。
+			    用 auto 而不是 hidden：说明再长也停在框里自己滚，不必先点「查看更多」才能读完。 */}
 			<div
-				className="markdown-body text-[12.5px] leading-[1.5] text-muted-foreground break-words"
+				className="text-muted-foreground"
 				data-testid="updater-release-note"
 				style={{
 					maxHeight: `${MAX_HEIGHT_PX}px`,
-					overflowY: "auto",
-					overflowX: "hidden",
 					overscrollBehavior: "contain",
+					overflowX: "hidden",
+					overflowY: "auto",
 				}}
 			>
-				<div ref={innerRef}>
-					<ReactMarkdown remarkPlugins={[remarkGfm]}>{markdown}</ReactMarkdown>
+				<div ref={innerRef} className="pr-1">
+					{outline.date && (
+						<div className="mb-2 text-[10.5px] tracking-wider text-muted-foreground/60">{outline.date}</div>
+					)}
+					{outline.sections.map((section, sectionIndex) => (
+						<section
+							className={sectionIndex === 0 ? "" : "mt-3"}
+							data-testid="updater-release-note-section"
+							key={`${sectionIndex}-${section.title ?? ""}`}
+						>
+							{section.title && (
+								<div className="mb-1.5 flex items-center gap-2">
+									<span className="shrink-0 text-[11px] font-semibold text-foreground/85">{section.title}</span>
+									<span className="h-px min-w-2 flex-1 bg-border/70" />
+								</div>
+							)}
+							<ol className="m-0 list-none space-y-1.5 p-0">
+								{section.items.map((item, itemIndex) => (
+									<li className="flex gap-2" data-testid="updater-release-note-item" key={`${itemIndex}-${item.body}`}>
+										<span
+											aria-hidden
+											className="w-3.5 shrink-0 text-right text-[10.5px] font-medium tabular-nums text-muted-foreground/45"
+										>
+											{itemIndex + 1}
+										</span>
+										<div className="min-w-0 flex-1">
+											{item.title && (
+												<div className="text-[12px] leading-snug font-medium text-foreground/90">{item.title}</div>
+											)}
+											{item.body && (
+												<p className={`m-0 text-[11.5px] leading-relaxed${item.title ? " mt-0.5" : ""}`}>
+													{item.body}
+												</p>
+											)}
+										</div>
+									</li>
+								))}
+							</ol>
+						</section>
+					))}
 				</div>
 			</div>
+			{/* 「查看更多」放在滚动框下面，不再用负 margin 盖在正文上：
+			    那是「最后几行被淡出遮住」的直接原因。 */}
 			{isOverflowing && (
-				<div className="pt-6 -mt-6 bg-gradient-to-t from-secondary via-secondary/85 to-transparent flex items-center justify-center relative z-10">
+				<div className="mt-1 flex justify-center">
 					<button
-						type="button"
+						className="inline-flex cursor-pointer items-center gap-1 rounded px-2 py-1 text-[12px] font-medium text-primary transition-colors hover:bg-muted/50 hover:underline"
 						onClick={onViewMore}
-						className="cursor-pointer inline-flex items-center gap-1 text-[12px] font-medium text-primary hover:underline py-1 px-2 rounded hover:bg-muted/50 transition-colors"
+						type="button"
 					>
 						<span>{viewMoreLabel}</span>
 						<span className="icon-[mdi--chevron-right] h-3.5 w-3.5" />

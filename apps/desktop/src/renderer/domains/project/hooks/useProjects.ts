@@ -39,6 +39,8 @@ let sessionListSubscribed = false;
  */
 let projectsChangedSubscribed = false;
 const sessionLoadPromises = new Map<string, Promise<void>>();
+/** 在途读取期间又收到重拉请求的 cwd：本轮 listSessions 结束后再补一趟，不能丢。 */
+const pendingSessionReloadCwds = new Set<string>();
 
 /**
  * `onSessionsChanged` 每轮对话至少触发 2~3 次（turn 开始 / 结束 / auto-title），
@@ -100,42 +102,59 @@ export function useProjectActions() {
 	const loadSessions = useCallback(
 		(cwd: string): Promise<void> => {
 			const activeLoad = sessionLoadPromises.get(cwd);
-			if (activeLoad) return activeLoad;
+			if (activeLoad) {
+				// 在途期间到达的请求不能直接复用旧 promise：那一趟的 listSessions 已经取过快照，
+				// 期间新落盘的会话（新建会话写完第一条消息、auto-title 改名）不在结果里。
+				// 早先直接 return 旧 promise 把请求吃掉了，于是新建会话在侧栏消失到下一次
+				// 无关事件为止——这里改成打标记，本轮结束后再补一趟。
+				pendingSessionReloadCwds.add(cwd);
+				return activeLoad;
+			}
 			setSessionLoadingCwds((prev) => new Set(prev).add(cwd));
-			const loadPromise = window.astravia.session
-				.listSessions(cwd)
-				.then((sessions: SessionInfo[]) =>
-					setSessionsMap((prev) => {
-						// 定时 / 新建 session 的 name、以及发送瞬间写入的乐观 firstMessage，在 assistant
-						// 首条落盘前磁盘可能仍是空 name + "(no messages)"。若直接覆盖会让侧栏/标题
-						// 闪回「未命名会话」。用上一次已知的非空 name / 可用 firstMessage 兜底。
-						const prevByPath = new Map((prev.get(cwd) ?? []).map((s) => [s.path, s]));
-						const merged = sessions.map((s) => {
-							const known = prevByPath.get(s.path);
-							if (!known) return s;
-							let next = s;
-							if (!s.name && known.name) {
-								next = { ...next, name: known.name };
-							}
-							if (!isUsableFirstMessage(s.firstMessage) && isUsableFirstMessage(known.firstMessage)) {
-								next = { ...next, firstMessage: known.firstMessage };
-							}
-							return next;
+			// 用 Promise.resolve().then 而不是立即执行的 async IIFE：后者会在下面 set() 之前就
+			// 跑到第一个 await，一旦 listSessions 同步抛错，finally 会先删掉一个还不存在的条目，
+			// 随后 set() 又把已结束的 promise 挂上去，之后的请求全被这个死 promise 吞掉。
+			const loadPromise = Promise.resolve().then(async () => {
+				try {
+					// 循环而不是递归：同一轮在途期间的多次请求合并成一次补拉。
+					do {
+						pendingSessionReloadCwds.delete(cwd);
+						const sessions = await window.astravia.session.listSessions(cwd);
+						setSessionsMap((prev) => {
+							// 定时 / 新建 session 的 name、以及发送瞬间写入的乐观 firstMessage，在 assistant
+							// 首条落盘前磁盘可能仍是空 name + "(no messages)"。若直接覆盖会让侧栏/标题
+							// 闪回「未命名会话」。用上一次已知的非空 name / 可用 firstMessage 兜底。
+							const prevByPath = new Map((prev.get(cwd) ?? []).map((s) => [s.path, s]));
+							const merged = sessions.map((s) => {
+								const known = prevByPath.get(s.path);
+								if (!known) return s;
+								let next = s;
+								if (!s.name && known.name) {
+									next = { ...next, name: known.name };
+								}
+								if (!isUsableFirstMessage(s.firstMessage) && isUsableFirstMessage(known.firstMessage)) {
+									next = { ...next, firstMessage: known.firstMessage };
+								}
+								return next;
+							});
+							// 内容没变就保持原引用：listSessions 被高频触发时结果往往完全一致，
+							// 换引用会白白唤醒所有 useProjects() 消费者（含 RootLayout 整棵树）。
+							if (sessionListsEqual(prev.get(cwd) ?? [], merged)) return prev;
+							return new Map([...prev, [cwd, merged]]);
 						});
-						// 内容没变就保持原引用：listSessions 被高频触发时结果往往完全一致，
-						// 换引用会白白唤醒所有 useProjects() 消费者（含 RootLayout 整棵树）。
-						if (sessionListsEqual(prev.get(cwd) ?? [], merged)) return prev;
-						return new Map([...prev, [cwd, merged]]);
-					}),
-				)
-				.finally(() => {
+					} while (pendingSessionReloadCwds.has(cwd));
+				} finally {
+					// 必须和上面的 while 在同一同步段里收尾：写成外层 .finally() 会多一个微任务
+					// 间隔，中间到达的请求会把标记写进 set，再被这里清掉——又是同一种「吞掉」。
+					pendingSessionReloadCwds.delete(cwd);
 					sessionLoadPromises.delete(cwd);
 					setSessionLoadingCwds((prev) => {
 						const next = new Set(prev);
 						next.delete(cwd);
 						return next;
 					});
-				});
+				}
+			});
 			sessionLoadPromises.set(cwd, loadPromise);
 			return loadPromise;
 		},

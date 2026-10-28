@@ -6,7 +6,11 @@
  * 发消息，把会话建回刚删掉的目录。这里把「要不要走、走去哪」收成纯函数。
  */
 export interface ProjectGoneRouteContext {
-	/** 当前路由 pathname，用于区分 `/`、`/project/$cwd`、`/new-session/$cwd`、`/viewer/$path`。 */
+	/**
+	 * 当前路由 pathname，用于区分 `/`、`/project/$cwd`、`/new-session`、`/viewer/$path`。
+	 * 规范的新会话页地址不带 cwd 路径段（`/new-session?cwd=…`），所以同时认带尾段
+	 * 的旧深链形式；只认 `/new-session/` 会让新会话页上的判断整个失效。
+	 */
 	readonly currentPath: string;
 	/** 当前路由的 `cwd` 参数，已解码；该路由没有这个参数时为空串。 */
 	readonly routeCwd: string;
@@ -38,9 +42,9 @@ export function resolveProjectGoneCleanup(
 		(context.activeSessionCwd !== "" && context.activeSessionCwd === projectCwd) ||
 		(context.activeSessionPath !== "" && sessionPathsInProject.includes(context.activeSessionPath));
 
+	const onNewSessionRoute = context.currentPath === "/new-session" || context.currentPath.startsWith("/new-session/");
 	const onProjectScopedRoute =
-		(context.currentPath.startsWith("/project/") || context.currentPath.startsWith("/new-session/")) &&
-		context.routeCwd === projectCwd;
+		(context.currentPath.startsWith("/project/") || onNewSessionRoute) && context.routeCwd === projectCwd;
 	const onViewerForProjectSession =
 		context.currentPath.startsWith("/viewer/") &&
 		context.routeSessionPath !== "" &&

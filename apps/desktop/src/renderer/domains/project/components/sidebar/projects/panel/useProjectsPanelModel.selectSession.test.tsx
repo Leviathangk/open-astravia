@@ -17,6 +17,7 @@ let routeMatches: Array<{ pathname: string; params: Record<string, string> }> = 
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => navigateSpy,
 	useMatches: () => routeMatches,
+	useSearch: () => ({}),
 }));
 
 vi.mock("@shared/lib/committed-paint", () => ({

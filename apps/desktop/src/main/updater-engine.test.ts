@@ -240,6 +240,91 @@ describe("ElectronUpdaterEngine", () => {
 		expect(vi.mocked(updater.quitAndInstall)).not.toHaveBeenCalled();
 	});
 
+	it("installs an unsigned bundle when Squirrel only reports an error event", async () => {
+		// 真实复现路径：electron-updater 把 ZIP 喂完 Squirrel 就 resolve，验签失败稍后才以
+		// error 事件到达（构造函数里只记日志）。只靠 catch 认领 ZIP 的话，这一步会漏，
+		// quitAndInstall() 退回 Squirrel——进度到 100%、退出、重开还是旧版本，全程无报错。
+		const root = await mkdtemp(join(tmpdir(), "astravia-unsigned-engine-"));
+		temporaryRoots.push(root);
+		const pendingDir = join(root, "pending");
+		await mkdir(pendingDir, { recursive: true });
+		const assetName = "Astravia-1.2.3-arm64-mac.zip";
+		await writeFile(join(pendingDir, assetName), "zip-bytes", "utf8");
+
+		const updateInfo: UpdateInfo = {
+			version: "1.2.3",
+			files: [{ url: assetName, sha512: "hash", size: 42 }],
+			path: assetName,
+			sha512: "zip",
+			releaseDate: new Date().toISOString(),
+		};
+		const updater = {
+			on: vi.fn(),
+			off: vi.fn(),
+			checkForUpdates: vi.fn().mockResolvedValue({ isUpdateAvailable: true, updateInfo }),
+			// 关键差异：Promise 正常 resolve，失败只体现在 error 事件上。
+			downloadUpdate: vi.fn().mockResolvedValue([join(pendingDir, assetName)]),
+			quitAndInstall: vi.fn(),
+			updateInfoAndProvider: { provider: { resolveFiles: vi.fn().mockReturnValue([]) } },
+			downloadedUpdateHelper: { cacheDir: root, cacheDirForPendingUpdate: pendingDir },
+		} as unknown as AppUpdater;
+		const launch = vi.fn().mockResolvedValue("/cache/install-Astravia-1.2.3-arm64-mac.sh");
+		const engine = new ElectronUpdaterEngine(
+			updater,
+			undefined,
+			undefined,
+			{},
+			{
+				appPath: "/Applications/Astravia.app",
+				cacheRoot: join(root, "cache"),
+				launch,
+			},
+		);
+
+		await engine.checkForUpdates();
+		await expect(engine.downloadUpdate(vi.fn()).promise).resolves.toEqual([join(pendingDir, assetName)]);
+
+		await engine.quitAndInstall();
+
+		expect(launch).toHaveBeenCalledWith({
+			appPath: "/Applications/Astravia.app",
+			archivePath: join(pendingDir, assetName),
+			cacheRoot: join(root, "cache"),
+			scriptName: "Astravia-1.2.3-arm64-mac",
+		});
+		expect(vi.mocked(updater.quitAndInstall)).not.toHaveBeenCalled();
+	});
+
+	it("refuses to install an unsigned macOS update with no staged archive", async () => {
+		// 认领失败时必须报错：退回 Squirrel 只会静默地什么都不装。
+		const root = await mkdtemp(join(tmpdir(), "astravia-unsigned-engine-"));
+		temporaryRoots.push(root);
+		const updater = {
+			on: vi.fn(),
+			off: vi.fn(),
+			checkForUpdates: vi.fn().mockResolvedValue(null),
+			downloadUpdate: vi.fn(),
+			quitAndInstall: vi.fn(),
+			downloadedUpdateHelper: { cacheDir: root, cacheDirForPendingUpdate: join(root, "pending") },
+		} as unknown as AppUpdater;
+		const launch = vi.fn().mockResolvedValue("/cache/install.sh");
+		const engine = new ElectronUpdaterEngine(
+			updater,
+			undefined,
+			undefined,
+			{ prepare: vi.fn(), finalize: vi.fn() },
+			{
+				appPath: "/Applications/Astravia.app",
+				cacheRoot: join(root, "cache"),
+				launch,
+			},
+		);
+
+		await expect(engine.quitAndInstall()).rejects.toThrow(/no staged archive/u);
+		expect(launch).not.toHaveBeenCalled();
+		expect(vi.mocked(updater.quitAndInstall)).not.toHaveBeenCalled();
+	});
+
 	it("finds the pending ZIP when the manifest lists another architecture first", async () => {
 		const root = await mkdtemp(join(tmpdir(), "astravia-unsigned-engine-"));
 		temporaryRoots.push(root);

@@ -9,6 +9,7 @@ const removeProject = vi.fn(async () => {});
 vi.mock("@tanstack/react-router", () => ({
 	useNavigate: () => vi.fn(),
 	useMatches: () => [{ pathname: "/", params: {} }],
+	useSearch: () => ({}),
 }));
 
 vi.mock("@domains/batch-tasks/hooks/useBatchTasks", () => ({

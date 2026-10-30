@@ -6,7 +6,7 @@ import { SIDEBAR_NARROW_BREAKPOINT } from "@shared/hooks/useNarrowScreen";
 import { SIDEBAR_WIDTH_DEFAULT, sidebarCollapsedAtom, sidebarWidthAtom } from "@shared/store/atoms";
 import { getDefaultStore } from "jotai";
 import { afterEach, describe, expect, it } from "vitest";
-import { readSidebarState, subscribeSidebarState } from "./sidebar-state";
+import { readSidebarState, setSidebarCollapsed, subscribeSidebarState } from "./sidebar-state";
 
 function setWindowWidth(width: number): void {
 	Object.defineProperty(window, "innerWidth", { configurable: true, writable: true, value: width });
@@ -42,7 +42,7 @@ describe("readSidebarState", () => {
 	});
 });
 
-describe("sidebar width", () => {
+describe("sidebar width and plugin control", () => {
 	it("拖动宽度时通知订阅者，宽度不变时不重复通知", () => {
 		setWindowWidth(WIDE);
 		const seen: number[] = [];
@@ -57,9 +57,9 @@ describe("sidebar width", () => {
 	it("收起后宽度为 0，展开后恢复为当前宽度", () => {
 		setWindowWidth(WIDE);
 		getDefaultStore().set(sidebarWidthAtom, 250);
-		getDefaultStore().set(sidebarCollapsedAtom, true);
+		setSidebarCollapsed(true);
 		expect(readSidebarState()).toMatchObject({ collapsed: true, visible: false, width: 0 });
-		getDefaultStore().set(sidebarCollapsedAtom, false);
+		setSidebarCollapsed(false);
 		expect(readSidebarState()).toMatchObject({ collapsed: false, visible: true, width: 250 });
 	});
 });

@@ -16,5 +16,8 @@
 	<!-- appshot（Astravia Computer Use）通过 Apple Events 驱动其他 app -->
 	<key>com.apple.security.automation.apple-events</key>
 	<true/>
+	<!-- 语音输入：hardened runtime 下没有这条，getUserMedia 的麦克风采集会被卡住 -->
+	<key>com.apple.security.device.audio-input</key>
+	<true/>
 </dict>
 </plist>

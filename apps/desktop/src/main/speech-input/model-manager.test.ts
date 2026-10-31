@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { SpeechModelDefinition } from "./model-catalog.js";
-import { WINDOWS_ZIPFORMER_MODEL } from "./model-catalog.js";
+import { BUNDLED_ZIPFORMER_MODEL } from "./model-catalog.js";
 import { SpeechModelManager } from "./model-manager.js";
 
 const temporaryRoots: string[] = [];
@@ -48,9 +48,21 @@ describe("SpeechModelManager", () => {
 		});
 	});
 
-	it("only reports support on Windows x64", async () => {
+	it("reports support on every bundled desktop target", async () => {
 		const modelRoot = await createModelRoot();
-		const manager = new SpeechModelManager({ platform: "darwin", arch: "arm64", modelRoot });
+		for (const [platform, arch] of [
+			["win32", "x64"],
+			["darwin", "arm64"],
+			["darwin", "x64"],
+		] as const) {
+			const manager = new SpeechModelManager({ platform, arch, modelRoot, model: TEST_MODEL });
+			expect(manager.supported).toBe(true);
+		}
+	});
+
+	it("rejects platforms that do not ship the native runtime", async () => {
+		const modelRoot = await createModelRoot();
+		const manager = new SpeechModelManager({ platform: "linux", arch: "x64", modelRoot });
 
 		await expect(manager.getStatus()).resolves.toMatchObject({
 			supported: false,
@@ -109,8 +121,8 @@ describe("SpeechModelManager", () => {
 	});
 
 	it("keeps the catalog total in sync with its files", () => {
-		expect(WINDOWS_ZIPFORMER_MODEL.totalBytes).toBe(
-			WINDOWS_ZIPFORMER_MODEL.files.reduce((total, file) => total + file.size, 0),
+		expect(BUNDLED_ZIPFORMER_MODEL.totalBytes).toBe(
+			BUNDLED_ZIPFORMER_MODEL.files.reduce((total, file) => total + file.size, 0),
 		);
 	});
 });

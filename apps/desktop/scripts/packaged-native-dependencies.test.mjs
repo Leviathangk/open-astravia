@@ -2,22 +2,31 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveMainBundleExternals, resolvePackagedNativeDependencies } from "./packaged-native-dependencies.mjs";
 
-test("stages sherpa only for Windows targets", () => {
+test("stages the sherpa runtime only on the platforms it is built for", () => {
 	const windows = resolvePackagedNativeDependencies(new Set(["win32"]));
 	assert.ok(windows.required.includes("sherpa-onnx-win-x64"));
 	assert.ok(windows.asarUnpack.includes("node_modules/sherpa-onnx-win-x64/**/*"));
 
-	for (const platform of ["darwin", "linux"]) {
-		const result = resolvePackagedNativeDependencies(new Set([platform]));
-		assert.ok(!result.required.includes("sherpa-onnx-win-x64"));
-		assert.ok(!result.asarUnpack.some((pattern) => pattern.includes("sherpa")));
-	}
+	const mac = resolvePackagedNativeDependencies(new Set(["darwin"]));
+	// 两个架构都是 optional：构建机只装得下本机架构那个，staging 允许缺位。
+	assert.deepEqual(
+		mac.optional.filter((dep) => dep.startsWith("sherpa")),
+		["sherpa-onnx-darwin-arm64", "sherpa-onnx-darwin-x64"],
+	);
+	assert.ok(!mac.required.some((dep) => dep.startsWith("sherpa")));
+
+	const linux = resolvePackagedNativeDependencies(new Set(["linux"]));
+	assert.ok(!linux.required.includes("sherpa-onnx-win-x64"));
+	assert.ok(!linux.asarUnpack.some((pattern) => pattern.includes("sherpa")));
 });
 
-test("omits sherpa from a speech-disabled Windows artifact", () => {
-	const windows = resolvePackagedNativeDependencies(new Set(["win32"]), { speechInputEnabled: false });
-	assert.ok(!windows.required.includes("sherpa-onnx-win-x64"));
-	assert.ok(!windows.asarUnpack.some((pattern) => pattern.includes("sherpa")));
+test("omits sherpa from artifacts without the speech feature", () => {
+	for (const platform of ["win32", "darwin"]) {
+		const result = resolvePackagedNativeDependencies(new Set([platform]), { speechInputEnabled: false });
+		assert.ok(!result.required.some((dep) => dep.startsWith("sherpa")));
+		assert.ok(!result.optional.some((dep) => dep.startsWith("sherpa")));
+		assert.ok(!result.asarUnpack.some((pattern) => pattern.includes("sherpa")));
+	}
 });
 
 test("keeps darwin-only glass out of Windows and Linux artifacts", () => {
@@ -85,5 +94,6 @@ test("keeps platform-specific packages external regardless of build target", () 
 	assert.ok(externals.includes("koffi"));
 	assert.ok(externals.includes("electron-liquid-glass"));
 	assert.ok(externals.includes("sherpa-onnx-win-x64"));
+	assert.ok(externals.includes("sherpa-onnx-darwin-arm64"));
 	assert.ok(!resolveMainBundleExternals({ speechInputEnabled: false }).includes("sherpa-onnx-win-x64"));
 });

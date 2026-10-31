@@ -3,6 +3,13 @@
 export const isMac = navigator.platform.toUpperCase().includes("MAC");
 export const isWindows = navigator.platform.toUpperCase().includes("WIN");
 
+/**
+ * 语音输入随包分发原生运行时与模型的平台，与主进程的
+ * speech-input/supported-platforms.json 对齐：Windows x64 与两种 macOS 架构。
+ * Linux 没有发布目标，那里不展示录音按钮。
+ */
+export const isSpeechInputPlatform = isWindows || isMac;
+
 /** 把平台写到 `<html data-platform>`，供仅在某个平台生效的样式（如 macOS 原生毛玻璃）选择。 */
 export function applyPlatformAttribute(): void {
 	document.documentElement.dataset.platform = isMac ? "mac" : isWindows ? "windows" : "linux";

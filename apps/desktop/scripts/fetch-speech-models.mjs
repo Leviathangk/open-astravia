@@ -63,7 +63,7 @@ export function resolveSpeechModelTargetTags(env = process.env, platform = proce
 	return resolveSpeechInputTargetTags(env, platform, arch);
 }
 
-export function requiresWindowsSpeechModel(platformTags, env = process.env) {
+export function requiresSpeechModel(platformTags, env = process.env) {
 	return resolveSpeechInputBuildConfig({ env, platformTags }).enabled;
 }
 

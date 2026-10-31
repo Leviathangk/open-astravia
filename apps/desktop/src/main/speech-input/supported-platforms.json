@@ -1,0 +1,7 @@
+{
+	"platforms": {
+		"win32-x64": "sherpa-onnx-win-x64",
+		"darwin-arm64": "sherpa-onnx-darwin-arm64",
+		"darwin-x64": "sherpa-onnx-darwin-x64"
+	}
+}

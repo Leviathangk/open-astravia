@@ -52,8 +52,27 @@ binding 是同步原生调用；若直接在 Electron 主进程中加载和解�
 
 - 默认 Windows 安装包增加原生运行时及约 160 MiB 模型；用户安装后无需额外网络即可使用语音输入。关闭版
   明确牺牲语音能力以缩小发布体积，不提供安装后的运行时开关或模型下载路径。
-- macOS/Linux 构建不会声明、暂存或解包 Sherpa Windows 二进制，也不会下载模型。
+- macOS/Linux 构建不会声明、暂存或解包 Sherpa Windows 二进制，也不会下载模型。（2026-10-31 起 macOS 已纳入平台合同，见文末更新）
 - 后续增加平台或模型时，应扩展平台化运行时清单与共享 manifest，不在 UI、IPC 或打包器中追加散落分支。
 - Windows 构建依赖模型源可达性；CI 可持久化 `resources/speech-models/` 以减少重复下载，但每次仍校验摘要。
 - Sherpa-ONNX 运行时采用 Apache-2.0。模型会由 Astravia 安装包再分发；正式发布前必须由
   产品/法务确认该模型仓库的模型权重使用条款符合目标分发地区和商业场景。
+
+## 更新 2026-10-31：平台合同扩展到 macOS
+
+原决策把平台固定为 `win32-x64`，实际结果是 macOS 有完整的采集、IPC 与界面链路却永远不可达：构建期
+`targetSupported` 只认 `win32-x64`，运行期 `SpeechModelManager.supported` 又硬判断
+`platform === "win32"`，两层都不看「本平台是否带原生运行时」。
+
+调整后的合同：
+
+- 支持列表收敛为 `src/main/speech-input/supported-platforms.json` 里的 `win32-x64`、`darwin-arm64`、`darwin-x64`，
+  构建脚本（`scripts/speech-input-build-config.js`）与运行时代码（`speech-input/platforms.ts`）读同一份，不再各写一份。
+- 原生包名与平台标签同名：`sherpa-onnx-<platform>-<arch>`，只在不同平台之间复用同一套代码路径，不引入
+  平台分支；不在列表里的目标在 `resolveSherpaNativeModule` 处立即报错。
+- 支持列表的每个目标都必须真的装上对应 `sherpa-onnx-*` 可选依赖：`prepare-pack` 在启用语音时校验本次目标
+  的原生包已进入 staging，避免「按钮在、一录音就 `Cannot find module`」的故障只在安装包里复现。
+- macOS 额外需要 `NSMicrophoneUsageDescription` 与 `com.apple.security.device.audio-input` entitlement
+  （主 app 与子 helper 两份），否则 hardened runtime 下 getUserMedia 拿不到麦克风。
+- Linux 仍然不在列表内：没有发布目标，也没有在 PulseAudio/PipeWire 下验证过采集链路。要开时把
+  `linux-x64` 加进同一份 JSON、补 `sherpa-onnx-linux-x64` 依赖与权限链路即可，不需要改 UI 或 IPC。

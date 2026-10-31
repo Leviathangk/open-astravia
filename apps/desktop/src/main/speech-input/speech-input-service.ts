@@ -5,7 +5,7 @@ import { app, utilityProcess } from "electron";
 import type { SpeechInputEvent, SpeechInputStatus } from "../../preload/api-types/speech-input.js";
 import { isSpeechInputBuildEnabled } from "../../shared/feature-flags.js";
 import { getAppLogger } from "../logger.js";
-import { resolveSpeechModelPaths, WINDOWS_ZIPFORMER_MODEL } from "./model-catalog.js";
+import { BUNDLED_ZIPFORMER_MODEL, resolveSpeechModelPaths } from "./model-catalog.js";
 import { SpeechModelManager } from "./model-manager.js";
 import { isSpeechHostEvent, type SpeechHostCommand, type SpeechHostEvent } from "./protocol.js";
 
@@ -226,7 +226,7 @@ export class SpeechInputService {
 				this.requireChild().postMessage({
 					type: "initialize",
 					model: resolveSpeechModelPaths(this.modelManager.modelDirectory),
-					sampleRate: WINDOWS_ZIPFORMER_MODEL.sampleRate,
+					sampleRate: BUNDLED_ZIPFORMER_MODEL.sampleRate,
 				});
 				break;
 			case "initializing":
@@ -292,7 +292,7 @@ export class SpeechInputService {
 		this.publishStatus({
 			supported: this.modelManager.supported,
 			phase,
-			modelId: WINDOWS_ZIPFORMER_MODEL.id,
+			modelId: BUNDLED_ZIPFORMER_MODEL.id,
 			...(errorCode ? { errorCode } : {}),
 		});
 	}

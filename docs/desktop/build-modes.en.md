@@ -142,7 +142,7 @@ ASTRAVIA_UPDATE_URL=https://releases.astravia.dev/desktop/test
 
 | Variable | Description |
 | --- | --- |
-| `ASTRAVIA_SPEECH_INPUT_ENABLED` | `false` excludes the speech models, the Sherpa native runtime and the speech entry point. Enabled by default |
+| `ASTRAVIA_SPEECH_INPUT_ENABLED` | `false` excludes the speech models, the Sherpa native runtime and the speech entry point. Enabled by default; only applies to `win32-x64`, `darwin-arm64` and `darwin-x64` targets — see [ADR-0070](../adr/0070-windows-local-streaming-speech-input.md) |
 | `ASTRAVIA_TENANT` | System-plugin tenant, decides which presets get packaged. See `packages/plugins/tenants.json` |
 | `ASTRAVIA_BUILD_ENV` | Selects which `.env.<mode>` to load |
 

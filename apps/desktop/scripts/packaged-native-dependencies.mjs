@@ -18,6 +18,10 @@ const DEFINITIONS = [
 	{ name: "uiohook-napi", platforms: "all", unpack: true },
 	{ name: "electron-liquid-glass", platforms: ["darwin"], unpack: true, optional: true },
 	{ name: "sherpa-onnx-win-x64", platforms: ["win32"], unpack: true, feature: "speech-input" },
+	// macOS 两个架构都列（platforms 只区分 OS）：构建机一般只装得下本机架构那个，
+	// 另一个缺位是预期行为，所以标 optional；本次目标那个缺失会在构建后被拦下来。
+	{ name: "sherpa-onnx-darwin-arm64", platforms: ["darwin"], unpack: true, feature: "speech-input", optional: true },
+	{ name: "sherpa-onnx-darwin-x64", platforms: ["darwin"], unpack: true, feature: "speech-input", optional: true },
 	// 远程接入的中继连接（desktop-websocket）在主进程顶层静态 import，必须随包分发。
 	// 纯 JS，无平台差异，也不需要 unpack。
 	{ name: "ws", platforms: "all", unpack: false },

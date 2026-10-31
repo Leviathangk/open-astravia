@@ -1084,7 +1084,8 @@
 		"stopping": "Stopping…"
 	},
 	"session": {
-		"emptyMessageLabel": "(image)"
+		"emptyMessageLabel": "(image)",
+		"unavailableNotice": "This session's file is damaged and can't be opened. You can delete it from its context menu."
 	},
 	"subagentCard": {
 		"back": "Back to parent session",

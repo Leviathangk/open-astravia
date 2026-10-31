@@ -38,6 +38,16 @@ const SESSION_INFO_CACHE_LIMIT = 512;
  * 记住上一份结果，文件大小与 mtime 都没变时只 stat：多会话并发时不再反复解析几 MB 的会话。
  */
 const sessionInfoCache = new Map<string, CachedSessionHistoryInfo>();
+interface CachedSessionHeader {
+	readonly size: number;
+	readonly mtimeMs: number;
+	readonly sessionId: string;
+}
+/**
+ * 归属判定只需要知道「这个文件是谁的」，不必再读一遍内容；而 access 解析会对列表里每条会话各问一次。
+ * 列表这一趟已经读过文件头，这里记住 (size, mtime) → sessionId，命中时只花一次 stat。
+ */
+const sessionHeaderCache = new Map<string, CachedSessionHeader>();
 
 export interface RuntimeConversationSessionRoot {
 	readonly cwd: string;
@@ -66,13 +76,16 @@ export class FileConversationRuntimeSessionCatalog implements RuntimeSessionCata
 		this.artifactCleaner = options.artifactCleaner;
 	}
 
+	/**
+	 * 归属口径必须和「会不会把这个文件列出来」一致。
+	 *
+	 * 文件头读不出来时，列表靠文件名还原 id 继续显示（见 {@link recoverDamagedSessionHistoryInfo}），
+	 * 删除也靠文件名兜底（见 {@link resolveDeletableSessionId}）。如果这里只认完整可读的文件，
+	 * 这类残档就会被 access 解析判成「无人认领」——宿主回填全 false，侧栏里既打不开也删不掉，
+	 * 只能永远占着一行「未命名会话」。
+	 */
 	async ownsSession(sessionPath: string): Promise<boolean> {
-		try {
-			const header = await readConversationHeader(sessionPath);
-			return header !== undefined && isCanonicalConversationPath(sessionPath, header.sessionId);
-		} catch {
-			return false;
-		}
+		return (await resolveOwnedSessionId(sessionPath)) !== undefined;
 	}
 
 	async listProjects(): Promise<ProjectInfo[]> {
@@ -135,6 +148,7 @@ export class FileConversationRuntimeSessionCatalog implements RuntimeSessionCata
 			// 也可能把它当成某个新会话的待发队列。
 			await rm(`${path}.queue.json`, { force: true });
 			await rm(path, { force: true });
+			forgetSessionCaches(path);
 		} finally {
 			await releaseFileLock?.();
 			await lease.release();
@@ -205,6 +219,23 @@ function rememberSessionInfo(key: string, stats: { size: number; mtimeMs: number
 		if (!oldest.done) sessionInfoCache.delete(oldest.value);
 	}
 	sessionInfoCache.set(key, { size: stats.size, mtimeMs: stats.mtimeMs, info });
+	rememberSessionHeader(resolve(info.path), stats, info.id);
+}
+
+function rememberSessionHeader(path: string, stats: { size: number; mtimeMs: number }, sessionId: string): void {
+	if (!sessionHeaderCache.has(path) && sessionHeaderCache.size >= SESSION_INFO_CACHE_LIMIT) {
+		const oldest = sessionHeaderCache.keys().next();
+		if (!oldest.done) sessionHeaderCache.delete(oldest.value);
+	}
+	sessionHeaderCache.set(path, { size: stats.size, mtimeMs: stats.mtimeMs, sessionId });
+}
+
+/** 文件没了，两份缓存都得跟着掉：否则已删掉的会话会被旧结果重新拉回列表或继续被认领。 */
+function forgetSessionCaches(path: string): void {
+	for (const key of sessionInfoCache.keys()) {
+		if (key.slice(0, path.length) === path && key.charAt(path.length) === "\n") sessionInfoCache.delete(key);
+	}
+	sessionHeaderCache.delete(path);
 }
 
 async function readListedSessionHistoryInfo(sessionPath: string, fallbackCwd: string): Promise<SessionHistoryInfo> {
@@ -216,7 +247,7 @@ async function readListedSessionHistoryInfo(sessionPath: string, fallbackCwd: st
 		stats = await stat(path);
 	} catch (error) {
 		// 文件不在了：缓存也得跟着掉，否则已删掉的会话会被旧结果拉回列表。
-		if (nodeErrorCode(error) === "ENOENT") sessionInfoCache.delete(key);
+		if (nodeErrorCode(error) === "ENOENT") forgetSessionCaches(path);
 		throw error;
 	}
 	if (cached && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) return cached.info;
@@ -365,6 +396,29 @@ function extractMessageText(content: unknown): string | undefined {
 function normalizeMessageText(text: string): string | undefined {
 	const normalized = text.replace(/\s+/g, " ").trim();
 	return normalized || undefined;
+}
+
+/**
+ * 与列表、删除共用的归属判定：文件头可读且路径与 sessionId 对应，或者文件还在、文件名本身能解出 id。
+ *
+ * 已经不在磁盘上的路径不算自己的——清理逻辑和 access 解析会据此跳过它，而不是对着不存在的文件报错。
+ */
+async function resolveOwnedSessionId(sessionPath: string): Promise<string | undefined> {
+	const path = resolve(sessionPath);
+	const stats = await stat(path).catch(() => undefined);
+	if (!stats?.isFile()) return undefined;
+	const cached = sessionHeaderCache.get(path);
+	if (cached && cached.size === stats.size && cached.mtimeMs === stats.mtimeMs) return cached.sessionId;
+	let sessionId: string | undefined;
+	try {
+		const header = await readConversationHeader(path);
+		if (header && isCanonicalConversationPath(path, header.sessionId)) sessionId = header.sessionId;
+	} catch {
+		// 读不出来（被并发替换、还没写完、没有权限）时只能靠文件名；文件是否存在上面已经判过。
+	}
+	sessionId ??= resolveSessionIdFromPath(dirname(path), path);
+	if (sessionId) rememberSessionHeader(path, stats, sessionId);
+	return sessionId;
 }
 
 /**

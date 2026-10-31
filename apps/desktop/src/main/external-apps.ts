@@ -53,6 +53,15 @@ export async function listExternalApplications(targetPath: string | null): Promi
 		seen.add(key);
 		return true;
 	});
+	// 内置路径和 App Paths 都没认出编辑器时，再问一次 Windows 自己登记的应用：
+	// 便携版、装在非默认盘位的编辑器只在 HKCR\Applications 里留名。
+	if (process.platform === "win32" && !unique.some((app) => app.kind === "editor")) {
+		for (const app of await listWindowsRegisteredApplications()) {
+			if (unique.some((existing) => sameApplication(existing, app))) continue;
+			if (unique.some((existing) => existing.name.trim().toLowerCase() === app.name.toLowerCase())) continue;
+			unique.push(app);
+		}
+	}
 	// 稳定排序：同分类内保持「内置声明顺序」，VS Code 这类最常用的入口仍在最前。
 	return unique.sort(compareApplications);
 }
@@ -377,6 +386,9 @@ function windowsCandidates(): KnownApplication[] {
 				join(programFiles, "Sublime Text", "sublime_text.exe"),
 				join(programFiles, "Sublime Text 3", "sublime_text.exe"),
 				join(programFilesX86, "Sublime Text", "sublime_text.exe"),
+				join(programs("Sublime Text"), "sublime_text.exe"),
+				join(programs("Sublime Text 3"), "sublime_text.exe"),
+				join(localAppData, "Sublime Text", "sublime_text.exe"),
 			],
 		},
 		{
@@ -409,10 +421,18 @@ const WINDOWS_APP_PATHS_KEYS = [
 ];
 
 const WINDOWS_REGISTRY_VIEWS = ["/reg:64", "/reg:32"] as const;
+/**
+ * `reg query … /s` 会把整棵子树吐出来，超过 Node 默认的 1MB stdout 上限时 execFile 直接报错。
+ * 那时整条来源静默归零（菜单里一个应用都没有），而错误又只停在 catch 里。
+ */
+const WINDOWS_REGISTRY_MAX_BUFFER = 8 * 1024 * 1024;
 
 async function queryWindowsRegistry(args: readonly string[]): Promise<string | null> {
 	try {
-		const { stdout } = await execFileAsync("reg", [...args], { timeout: 5000 });
+		const { stdout } = await execFileAsync("reg", [...args], {
+			timeout: 15_000,
+			maxBuffer: WINDOWS_REGISTRY_MAX_BUFFER,
+		});
 		return stdout;
 	} catch {
 		// 项不存在、视图不可用、reg 被策略拦下——都当作「这个位置没查出东西」。
@@ -479,9 +499,67 @@ export function parseWindowsShellVerbs(stdout: string): ExternalApplication[] {
 	return apps;
 }
 
+/**
+ * 解析 `HKCR\Applications` 里应用自己登记的打开命令（`<exe>\shell\open\command`）。
+ *
+ * 这是 App Paths 之外的第二份权威名单：便携版、绿色版、装在任意盘位上的编辑器、
+ * 终端都会写这里，而它们既不在默认安装目录也不一定在 App Paths。侧栏菜单只关心
+ * 能打开目录的那几类，所以认不出类型的条目一概不入——否则菜单会被卸载残留渡没。
+ */
+export function parseWindowsApplicationEntries(stdout: string): ExternalApplication[] {
+	const apps: ExternalApplication[] = [];
+	const seen = new Set<string>();
+	let currentExe = "";
+	let insideCommand = false;
+
+	for (const line of stdout.split(/\r?\n/)) {
+		const keyMatch = line.match(/(?:^|\\)Applications\\([^\\]+)(\\shell\\open\\command)?$/i);
+		if (keyMatch) {
+			currentExe = keyMatch[1];
+			insideCommand = Boolean(keyMatch[2]);
+			continue;
+		}
+		if (!insideCommand || !currentExe) continue;
+		const defaultMatch = line.match(/^\s*\(Default\)\s+REG_(?:EXPAND_)?SZ\s+(.+)$/i);
+		if (!defaultMatch) continue;
+		insideCommand = false;
+		const exePath = windowsCommandExecutable(expandWindowsEnv(defaultMatch[1].trim()));
+		if (exePath === null) continue;
+		const pathKey = exePath.toLowerCase();
+		if (seen.has(pathKey)) continue;
+		const name = windowsApplicationName(exePath);
+		const kind = inferApplicationKind(name);
+		if (kind === "other" && !(currentExe.toLowerCase() in WINDOWS_EXE_NAMES)) continue;
+		seen.add(pathKey);
+		apps.push({ id: exePath, name, applicationPath: exePath, kind, isDefault: false });
+	}
+
+	return apps;
+}
+
 async function listApplicationsWindows(_targetPath: string): Promise<ExternalApplication[]> {
 	const stdout = await queryWindowsRegistry(["query", "HKCR\\Directory\\shell", "/s"]);
 	return stdout === null ? [] : parseWindowsShellVerbs(stdout);
+}
+
+/**
+ * 一条应用都认不出来时的最后一级：请 Windows 自己报名单。
+ *
+ * 只有在前面的内置路径与 App Paths 都没找到编辑器时才跑——`/s` 扫整棵
+ * `HKCR\Applications` 是好几秒的活，菜单不能为它付常规代价。
+ */
+async function listWindowsRegisteredApplications(): Promise<ExternalApplication[]> {
+	const apps: ExternalApplication[] = [];
+	for (const view of WINDOWS_REGISTRY_VIEWS) {
+		const stdout = await queryWindowsRegistry(["query", "HKCR\\Applications", "/s", view]);
+		if (stdout === null) continue;
+		for (const app of parseWindowsApplicationEntries(stdout)) {
+			if (apps.some((existing) => sameApplication(existing, app))) continue;
+			if (!(await pathExists(app.applicationPath))) continue;
+			apps.push(app);
+		}
+	}
+	return apps;
 }
 
 /**

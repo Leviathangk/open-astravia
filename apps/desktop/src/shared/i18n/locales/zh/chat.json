@@ -1084,7 +1084,8 @@
 		"stopping": "正在停止…"
 	},
 	"session": {
-		"emptyMessageLabel": "(图片)"
+		"emptyMessageLabel": "(图片)",
+		"unavailableNotice": "这个会话的文件已经损坏，打不开。可以在它的右键菜单里删除。"
 	},
 	"subagentCard": {
 		"back": "返回父会话",

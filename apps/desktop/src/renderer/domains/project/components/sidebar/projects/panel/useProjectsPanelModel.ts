@@ -1,6 +1,7 @@
 import { useBatchTasks } from "@domains/batch-tasks/hooks/useBatchTasks";
 import { notifyTeamSessionsChanged } from "@shared/agent-teams/team-session-events";
 import { decodeNewSessionCwd, newSessionTarget } from "@shared/app-shell/new-session-route";
+import { i18n } from "@shared/i18n";
 import { pathBasename } from "@shared/lib/utils";
 import type { SessionInfo } from "@shared/store/atoms";
 import {
@@ -15,6 +16,7 @@ import {
 	inlineFilePreviewAtom,
 	pendingSessionOpenAtom,
 } from "@shared/store/atoms";
+import { showToast } from "@shared/store/toast-atoms";
 import { useMatches, useNavigate, useSearch } from "@tanstack/react-router";
 import { useAtom, useAtomValue, useSetAtom, useStore } from "jotai";
 import { selectAtom } from "jotai/utils";
@@ -221,7 +223,12 @@ export function useProjectsPanelModel({
 	const openSessionByTarget = useCallback(
 		(cwd: string, path: string) => {
 			const target = resolveSessionOpenTarget(sessionsMapRef.current.get(cwd), path);
-			if (target === "unavailable") return;
+			if (target === "unavailable") {
+				// 文件头读不出来的残档既不能交互式恢复也不能进只读视图。以前这里直接 return，
+				// 用户点下去毫无反应，只能反复点。说清楚它坏了、而且可以删。
+				showToast({ variant: "warning", message: i18n.t("chat:session.unavailableNotice") });
+				return;
+			}
 			if (target === "viewer") {
 				selectAfterPaint({ kind: "conversation", path }, () =>
 					navigate({ to: "/viewer/$path", params: { path: encodeURIComponent(path) } }),

@@ -6,6 +6,7 @@ import {
 	inferApplicationKind,
 	launchDetached,
 	macosLaunchPlan,
+	parseWindowsApplicationEntries,
 	parseWindowsShellVerbs,
 	windowsApplicationName,
 	windowsLaunchPlan,
@@ -210,6 +211,49 @@ describe("parseWindowsShellVerbs", () => {
 
 	it('"在此处打开" 登记之外的键不影响结果', () => {
 		expect(parseWindowsShellVerbs("")).toEqual([]);
+	});
+
+	/**
+	 * 便携版、装在非默认盘位的编辑器不会出现在 App Paths 也不在默认安装目录，
+	 * 只在 `HKCR\Applications` 里留一条打开命令。读不出来，菜单就只剩一个文件管理器。
+	 */
+	describe("parseWindowsApplicationEntries", () => {
+		it("从应用自己登记的打开命令里读出 exe", () => {
+			const stdout = [
+				"HKEY_CLASSES_ROOT\\Applications\\sublime_text.exe",
+				"    (Default)    REG_SZ    Sublime Text",
+				"HKEY_CLASSES_ROOT\\Applications\\sublime_text.exe\\shell\\open\\command",
+				'    (Default)    REG_SZ    "D:\\Tools\\Sublime Text\\sublime_text.exe" "%1"',
+			].join("\r\n");
+
+			const apps = parseWindowsApplicationEntries(stdout);
+			expect(apps).toHaveLength(1);
+			expect(apps[0]).toMatchObject({
+				name: "Sublime Text",
+				applicationPath: "D:\\Tools\\Sublime Text\\sublime_text.exe",
+				kind: "editor",
+			});
+		});
+
+		it("认不出类型的登记不入菜单：卸载残留会让菜单变垃圾场", () => {
+			const stdout = [
+				"HKEY_CLASSES_ROOT\\Applications\\some_tool.exe\\shell\\open\\command",
+				'    (Default)    REG_SZ    "C:\\Tools\\some_tool.exe" "%1"',
+			].join("\r\n");
+
+			expect(parseWindowsApplicationEntries(stdout)).toEqual([]);
+		});
+
+		it("同一个 exe 登记在多处只留一行", () => {
+			const stdout = [
+				"HKEY_CLASSES_ROOT\\Applications\\Cursor.exe\\shell\\open\\command",
+				'    (Default)    REG_SZ    "%LOCALAPPDATA%\\Programs\\cursor\\Cursor.exe" "%1"',
+				"HKEY_CLASSES_ROOT\\Applications\\cursor.exe\\shell\\open\\command",
+				'    (Default)    REG_SZ    "%LOCALAPPDATA%\\Programs\\cursor\\Cursor.exe" "%1"',
+			].join("\r\n");
+
+			expect(parseWindowsApplicationEntries(stdout)).toHaveLength(1);
+		});
 	});
 });
 

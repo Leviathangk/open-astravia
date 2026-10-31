@@ -4,15 +4,17 @@ import { defaultTheme } from "./default";
 // 「薄荷」主题：青绿主色 + 冷调表面。
 //
 // 浅色画布带一层薄荷灰（不是纯白），卡面比画布更亮，muted/secondary 依次加深；
-// 深色画布是近黑的冷绿，卡面与浮层逐级提亮。
+// 深色画布是提亮过的青灰绿，卡面与浮层逐级提亮，分栏和边框都看得见。
 // chart 取青绿一族 + 一枚冷蓝，避免图表区域显出一块不属于主题的颜色。
-// 色相守住青绿一侧：与森林（橄榄绿）刻意分色相，两套深色侧栏 RGB 距离 18.5。
+// 色相守住青绿一侧（蓝高于绿）：与森林（橄榄绿）刻意分色相，两套深色侧栏 RGB 距离 17.7。
 //
-// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.0075–0.02，
-// 深色相邻表面 RGB 距离 ≥8；浅色四层表面彼此 ≥12。
+// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.011–0.02，
+// 深色相邻表面 RGB 距离 ≥8、卡面与浮层 ≥6，且边框对画布的对比度要够看（≥2.2）；
+// 浅色四层表面彼此 ≥12。
 // 深色原先压到过 0.0051——黑到没有光感，侧栏、卡面、画布糊成一片，看不出层次；
 // 浅色原先只靠“卡面比画布亮一点点”做层次，四层都落在同一档米白里，读上去像一块布。
-// 所以深色抬亮画布（现 0.0098），浅色改成向下逐级压暗拉开层差。
+// 浅色改成向下逐级压暗拉开层差。深色抬到 0.0128：青绿在过暗处会变成发黑的蓝，
+// 抬亮后色相才回得来。
 
 const PRIMARY_LIGHT = "#127a6b";
 const PRIMARY_DARK = "#5fd4b0";
@@ -29,15 +31,15 @@ const LIGHT_BORDER = "#a5d3cb";
 const LIGHT_INPUT = "#b6dcd6";
 const LIGHT_MUTED_FG = "#33564f";
 
-const DARK_BG = "#0a1c1d";
+const DARK_BG = "#122023";
 const DARK_FG = "#e0f0ea";
-const DARK_CARD = "#142e2b";
-const DARK_POPOVER = "#16332e";
-const DARK_MUTED = "#0f2422";
-const DARK_SECONDARY = "#1a3a36";
-const DARK_ACCENT = "#20433c";
-const DARK_BORDER = "#2b5249";
-const DARK_INPUT = "#336052";
+const DARK_CARD = "#1a2f33";
+const DARK_POPOVER = "#1d3539";
+const DARK_MUTED = "#16262a";
+const DARK_SECONDARY = "#1f373c";
+const DARK_ACCENT = "#223d42";
+const DARK_BORDER = "#37636b";
+const DARK_INPUT = "#3e7079";
 const DARK_MUTED_FG = "#86a8a1";
 
 export const mintTheme: ThemeDef = {

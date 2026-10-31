@@ -1,11 +1,12 @@
 import { TabBar } from "@shared/components/ui/tab-bar";
 import type { ActivityTabKey } from "@shared/lib/project-profile";
 import { ActivityPanel as ActivityPanelPrimitive } from "@astravia-org/theme-ui/activity/ActivityPanel";
-import { type ComponentType, useRef } from "react";
+import { type ComponentType, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDockedContentReady } from "../../hooks/useDockedContentReady";
 import { useDockedOutlet } from "../../hooks/useDockedOutlet";
 import { PluginTabPicker } from "../PluginTabPicker";
+import { ActivityTabContextMenu } from "./ActivityTabContextMenu";
 import { ActivityTabSurface } from "./ActivityTabSurface";
 import type { ActivityPanelFrameProps } from "./ActivityPanelFrame";
 import type { ActivityPanelActions, ActivityPanelModel } from "./types";
@@ -23,6 +24,7 @@ export function ActivityPanelView({
 }: ActivityPanelViewProps): JSX.Element {
 	const { t } = useTranslation("project");
 	const removeLabel = t("tabPicker.hideTab");
+	const [tabMenu, setTabMenu] = useState<{ key: ActivityTabKey; x: number; y: number } | null>(null);
 	// A closed docked panel must not keep its measurement-heavy visual tree alive.
 	// Floating tabs are independent windows and remain mounted below.
 	const renderDockedPanel = model.isOpen;
@@ -50,6 +52,11 @@ export function ActivityPanelView({
 					removeLabel={removeLabel}
 					onReorder={model.knowledgeHistory ? undefined : actions.onReorderTabs}
 					onOverflowChange={model.knowledgeHistory ? undefined : actions.onOverflowChange}
+					onTabContextMenu={
+						model.knowledgeHistory
+							? undefined
+							: (key, point) => setTabMenu({ key, x: point.x, y: point.y })
+					}
 				/>
 			) : null;
 
@@ -132,6 +139,23 @@ export function ActivityPanelView({
 					/>
 				);
 			})}
+			{tabMenu && (
+				<ActivityTabContextMenu
+					items={model.tabItems}
+					labels={{
+						closeTab: t("tabPicker.closeTab"),
+						closeLeft: t("tabPicker.closeLeft"),
+						closeRight: t("tabPicker.closeRight"),
+						closeOthers: t("tabPicker.closeOthers"),
+						closeAll: t("tabPicker.closeAll"),
+					}}
+					tabKey={tabMenu.key}
+					x={tabMenu.x}
+					y={tabMenu.y}
+					onClose={() => setTabMenu(null)}
+					onCloseTabs={actions.onCloseTabs}
+				/>
+			)}
 		</>
 	);
 }

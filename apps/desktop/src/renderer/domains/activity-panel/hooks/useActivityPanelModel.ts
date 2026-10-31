@@ -343,29 +343,42 @@ export function useActivityPanelModel({
 		warmEligibleTabs: resolved.onBar,
 	});
 
-	const onRemoveTab = useCallback(
-		(key: ActivityTabKey) => {
-			if (NON_HIDEABLE_TABS.has(key)) return;
-			const def = definitionById.get(key);
-			if (def && def.removable === false) return;
-			floating.actions.clearFloatingTab(key);
+	/**
+	 * 批量关闭：单个和批量走同一条路径，避免逐次调用时基于同一份快照覆写 hidden 列表。
+	 */
+	const closeTabs = useCallback(
+		(keys: readonly ActivityTabKey[]) => {
+			const targets = keys.filter((key) => {
+				if (NON_HIDEABLE_TABS.has(key)) return false;
+				const def = definitionById.get(key);
+				return !(def && def.removable === false);
+			});
+			if (targets.length === 0) return;
+			const targetSet = new Set<ActivityTabKey>(targets);
+			for (const key of targets) floating.actions.clearFloatingTab(key);
 
 			// 插件 tab：写显式下栏，回到「+」可添加池（不进 hidden 列表）。
-			if (key.startsWith("plugin:")) {
+			let nextAttached = attachedPluginTabsMap;
+			for (const key of targets) {
+				if (!key.startsWith("plugin:")) continue;
 				const attachKey = key.slice("plugin:".length);
-				const nextAttached = withTabVisibility(attachedPluginTabsMap, workspaceId, attachKey, false);
-				if (nextAttached) setAttachedPluginTabsMap(nextAttached);
-				if (activeTab === key) {
-					onTabChange(dockedTabItems.find((item) => item.key !== key)?.key ?? "file");
-				}
-				return;
+				const updated = withTabVisibility(nextAttached, workspaceId, attachKey, false);
+				if (updated) nextAttached = updated;
 			}
-			const next = new Map(hiddenTabsMap);
-			const current = next.get(workspaceId) ?? [];
-			if (!current.includes(key)) next.set(workspaceId, [...current, key]);
-			setHiddenTabsMap(next);
-			if (activeTab === key) {
-				onTabChange(dockedTabItems.find((item) => item.key !== key)?.key ?? "file");
+			if (nextAttached !== attachedPluginTabsMap) setAttachedPluginTabsMap(nextAttached);
+
+			const nativeKeys = targets.filter((key) => !key.startsWith("plugin:"));
+			if (nativeKeys.length > 0) {
+				const next = new Map(hiddenTabsMap);
+				const current = next.get(workspaceId) ?? [];
+				const merged = [...current];
+				for (const key of nativeKeys) if (!merged.includes(key)) merged.push(key);
+				next.set(workspaceId, merged);
+				setHiddenTabsMap(next);
+			}
+
+			if (targetSet.has(activeTab)) {
+				onTabChange(dockedTabItems.find((item) => !targetSet.has(item.key))?.key ?? "file");
 			}
 		},
 		[
@@ -381,6 +394,8 @@ export function useActivityPanelModel({
 			floating.actions.clearFloatingTab,
 		],
 	);
+	const onRemoveTab = useCallback((key: ActivityTabKey) => closeTabs([key]), [closeTabs]);
+	const onCloseTabs = closeTabs;
 	const onRestoreTab = useCallback(
 		(key: string) => {
 			const next = new Map(hiddenTabsMap);
@@ -431,6 +446,7 @@ export function useActivityPanelModel({
 		() => ({
 			onAttachTab,
 			onClose,
+			onCloseTabs,
 			onFloatingResize: floating.actions.onFloatingResize,
 			onFloatingResizeEnd: floating.actions.onFloatingResizeEnd,
 			onFloatingTabDragEnd: floating.actions.onFloatingTabDragEnd,
@@ -461,6 +477,7 @@ export function useActivityPanelModel({
 			floating.actions.onFloatingTabDragStart,
 			floating.actions.onFloatingTabFocus,
 			onRemoveTab,
+			onCloseTabs,
 			onReorderTabs,
 			onResizeStart,
 			onResize,

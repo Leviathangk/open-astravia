@@ -46,6 +46,8 @@ export interface ActivityPanelModel {
 export interface ActivityPanelActions {
 	onAttachTab: (key: string) => void;
 	onClose: () => void;
+	/** 批量关闭：单次状态更新完成，不可关闭的页签会被跳过。 */
+	onCloseTabs: (keys: readonly ActivityTabKey[]) => void;
 	onFloatingResize: (key: ActivityTabKey, delta: ActivityTabPoint) => void;
 	onFloatingResizeEnd: (key: ActivityTabKey) => void;
 	onFloatingTabDragEnd: (event: TabBarDragEvent<ActivityTabKey>) => boolean | undefined;

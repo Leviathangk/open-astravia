@@ -64,6 +64,8 @@ const WORKFLOW_CONTRACT_TESTS = new Map([
  */
 const MODEL_SELECTOR_VIEW_TEST = "src/renderer/domains/conversation/components/ModelSelectorView.test.tsx";
 const TEAM_MODEL_SELECTOR_TEST = "src/renderer/domains/conversation/connectors/team/TeamModelSelector.test.tsx";
+const ACTIVITY_PANEL_TABS_TEST = "src/renderer/domains/activity-panel/components/ActivityPanel.live-tabs.test.tsx";
+const FILE_TREE_CREATE_RENAME_TEST = "src/renderer/domains/file-explorer/components/file-tree-create-rename.test.tsx";
 const desktopTests = (...tests) => ({ workspaceKey: "desktop", tests });
 const goalTests = {
 	workspaceKey: "coding-agent",
@@ -151,6 +153,28 @@ const EXPLICIT_SOURCE_TESTS = new Map([
 		"packages/theme-ui/src/markdown/streaming.ts",
 		{ workspaceKey: "theme-ui", tests: ["src/markdown/streaming.test.ts"] },
 	],
+	// TabBar 的右键菜单与文件树新建/重命名的输入法保护都没有 theme-ui 内部测试，
+	// 它们的行为由桌面侧穿过真实组件的集成测试钉住。
+	["packages/theme-ui/src/shared/TabBar.tsx", desktopTests(ACTIVITY_PANEL_TABS_TEST)],
+	["packages/theme-ui/src/shared/useImeCompositionGuard.ts", desktopTests(FILE_TREE_CREATE_RENAME_TEST)],
+	["packages/theme-ui/src/file-explorer/FileTreeCreateRow.tsx", desktopTests(FILE_TREE_CREATE_RENAME_TEST)],
+	["packages/theme-ui/src/file-explorer/FileTreeNodeView.tsx", desktopTests(FILE_TREE_CREATE_RENAME_TEST)],
+	["packages/theme-ui/src/shared/index.ts", desktopTests(ACTIVITY_PANEL_TABS_TEST, FILE_TREE_CREATE_RENAME_TEST)],
+]);
+
+/**
+ * 平台原生包由 `src/main/speech-input/supported-platforms.json` 按平台表动态选包，源码里没有
+ * 静态 import，锁文件变动时上面那条 import 扫描找不到使用点。这里声明它们各自的契约测试：
+ * 两份测试钉住「平台标签 → 原生包名」映射与打包 externals，删掉任何一侧都会失败。
+ */
+const PLATFORM_NATIVE_PACKAGE_TESTS = [
+	"scripts/packaged-native-dependencies.test.mjs",
+	"src/main/speech-input/platforms.test.ts",
+];
+const EXPLICIT_DEPENDENCY_SOURCES = new Map([
+	["sherpa-onnx-win-x64", PLATFORM_NATIVE_PACKAGE_TESTS],
+	["sherpa-onnx-darwin-arm64", PLATFORM_NATIVE_PACKAGE_TESTS],
+	["sherpa-onnx-darwin-x64", PLATFORM_NATIVE_PACKAGE_TESTS],
 ]);
 
 function workspaceForFile(file) {
@@ -301,15 +325,35 @@ export function createImpactTestPlan(
 			selectionErrors.push(`bun.lock changed ${impact.key} without an identifiable direct dependency`);
 			continue;
 		}
-		const importers = dependencyImporterFiles(workspace, impact.dependencies);
+		const stillDeclared = impact.dependencies.filter((dependency) => dependency in workspace.dependencies);
+		// 平台原生包只按平台表动态选包，源码里没有任何 import 可以匹配；已经声明归属测试时再扫一遍整个
+		// 工作区（桌面侧三千多个文件）没有额外信息，只会把选择耗时推高十几秒。
+		const mappedByDeclaration =
+			stillDeclared.length > 0 && stillDeclared.every((dependency) => EXPLICIT_DEPENDENCY_SOURCES.has(dependency));
+		const importers = mappedByDeclaration ? [] : dependencyImporterFiles(workspace, impact.dependencies);
 		if (importers.length === 0) {
 			// 依赖被整体删掉时源码里当然没有任何 import——这正是删除该达成的结果，不需要再选测试。
-			// 只有仍然声明在 package.json 里却找不到使用点的依赖，才说明这里漏了影响面。
-			const stillDeclared = impact.dependencies.filter((dependency) => dependency in workspace.dependencies);
+			// 只有仍然声明在 package.json 里却找不到使用点的依赖，才说明这里漏了影响面；
+			// 平台原生包按平台表动态选包、没有静态 import，由 EXPLICIT_DEPENDENCY_SOURCES 声明归属。
 			if (stillDeclared.length === 0) continue;
-			selectionErrors.push(
-				`bun.lock changed ${impact.key} dependencies ${stillDeclared.join(", ")} without importing source files`,
-			);
+			const uncovered = stillDeclared.filter((dependency) => !EXPLICIT_DEPENDENCY_SOURCES.has(dependency));
+			if (uncovered.length > 0) {
+				selectionErrors.push(
+					`bun.lock changed ${impact.key} dependencies ${uncovered.join(", ")} without importing source files`,
+				);
+				continue;
+			}
+			const mappedFiles = [
+				...new Set(stillDeclared.flatMap((dependency) => EXPLICIT_DEPENDENCY_SOURCES.get(dependency))),
+			].sort();
+			const missingFiles = mappedFiles.filter((file) => !pathExists(`${workspace.dir}/${file}`));
+			if (missingFiles.length > 0) {
+				selectionErrors.push(
+					`bun.lock changed ${impact.key} dependencies ${stillDeclared.join(", ")} are mapped to missing files ${missingFiles.join(", ")}`,
+				);
+				continue;
+			}
+			for (const relativeFile of mappedFiles) addTargetFile(grouped, workspace, relativeFile, selectionErrors);
 			continue;
 		}
 		for (const relativeFile of importers) addTargetFile(grouped, workspace, relativeFile, selectionErrors);

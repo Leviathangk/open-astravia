@@ -852,4 +852,10 @@ export interface PluginUiApi {
 	 * 回调按值去重：拖窗口不会把它打成回调风暴，只有三元组真的变了才通知。
 	 */
 	onSidebarStateChanged(listener: (state: PluginSidebarState) => void): Disposable;
+	/**
+	 * 请求收起（`true`）或展开（`false`）宿主左侧侧边栏，效果与用户点收起/展开按钮相同。
+	 * 需要 `ui.sidebar.control` 权限（缺权限 = **warn+noop**）。窄屏下侧边栏本就走悬浮覆盖，
+	 * 这里只改用户意愿位 `collapsed`。
+	 */
+	setSidebarCollapsed(collapsed: boolean): void;
 }

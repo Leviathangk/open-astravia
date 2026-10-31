@@ -28,6 +28,11 @@ export function readSidebarState(): SidebarState {
 	);
 }
 
+/** 请求收起/展开侧边栏：与用户点侧栏收起按钮、页头展开按钮写的是同一个状态。 */
+export function setSidebarCollapsed(collapsed: boolean): void {
+	getDefaultStore().set(sidebarCollapsedAtom, collapsed);
+}
+
 /**
  * 订阅侧边栏状态变化，返回取消订阅函数。
  *

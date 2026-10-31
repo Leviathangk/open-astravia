@@ -2,7 +2,14 @@ import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { inferApplicationKind, launchDetached, macosLaunchPlan, windowsLaunchPlan } from "./external-apps.js";
+import {
+	inferApplicationKind,
+	launchDetached,
+	macosLaunchPlan,
+	parseWindowsShellVerbs,
+	windowsApplicationName,
+	windowsLaunchPlan,
+} from "./external-apps.js";
 
 /**
  * 菜单不再是「系统说谁能开目录」那一条路：本机装了什么编辑器要靠名字认出来。
@@ -146,6 +153,75 @@ describe("windowsLaunchPlan", () => {
 			args: [],
 			detach: false,
 		});
+	});
+});
+/**
+ * `reg query ...\shell /s` 的输出里，父键的 (Default) 是菜单显示名，命令在子键
+ * `\command` 的 (Default) 里。以前把两者当成同一种值，先打印显示名的应用就再也读不到
+ * 自己的 exe——装了 VS Code 但菜单里没有它，就是这条路径断了。
+ */
+describe("parseWindowsShellVerbs", () => {
+	it("从 \\command 子键读到 exe，父键的显示名不当成路径", () => {
+		const stdout = [
+			"HKEY_CLASSES_ROOT\\Directory\\shell\\VSCode",
+			"    (Default)    REG_SZ    Open with Code",
+			"",
+			"HKEY_CLASSES_ROOT\\Directory\\shell\\VSCode\\command",
+			'    (Default)    REG_SZ    "C:\\Users\\me\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe" "C:\\Users\\me\\...\\cli.js" "%V"',
+		].join("\r\n");
+
+		const apps = parseWindowsShellVerbs(stdout);
+		expect(apps).toHaveLength(1);
+		expect(apps[0]).toMatchObject({
+			name: "Visual Studio Code",
+			applicationPath: "C:\\Users\\me\\AppData\\Local\\Programs\\Microsoft VS Code\\Code.exe",
+			kind: "editor",
+		});
+	});
+
+	it("未加引号、路径带空格的命令也能取出 exe", () => {
+		const stdout = [
+			"HKEY_CLASSES_ROOT\\Directory\\shell\\SublimeText",
+			"HKEY_CLASSES_ROOT\\Directory\\shell\\SublimeText\\command",
+			"    (Default)    REG_SZ    C:\\Program Files\\Sublime Text\\sublime_text.exe %1",
+		].join("\r\n");
+
+		expect(parseWindowsShellVerbs(stdout).map((app) => app.applicationPath)).toEqual([
+			"C:\\Program Files\\Sublime Text\\sublime_text.exe",
+		]);
+	});
+
+	it("同一个 exe 被多个动词登记时只留一行，回调变量会展开", () => {
+		const stdout = [
+			"HKEY_CLASSES_ROOT\\Directory\\shell\\Code",
+			"HKEY_CLASSES_ROOT\\Directory\\shell\\Code\\command",
+			'    (Default)    REG_SZ    "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe" "%V"',
+			"HKEY_CLASSES_ROOT\\Directory\\shell\\VSCode",
+			"HKEY_CLASSES_ROOT\\Directory\\shell\\VSCode\\command",
+			'    (Default)    REG_SZ    "%LOCALAPPDATA%\\Programs\\Microsoft VS Code\\Code.exe" "%V"',
+		].join("\r\n");
+
+		const apps = parseWindowsShellVerbs(stdout);
+		expect(apps).toHaveLength(1);
+		expect(apps[0].applicationPath).toBe(
+			`${process.env.LOCALAPPDATA ?? "%LOCALAPPDATA%"}\\Programs\\Microsoft VS Code\\Code.exe`,
+		);
+	});
+
+	it('"在此处打开" 登记之外的键不影响结果', () => {
+		expect(parseWindowsShellVerbs("")).toEqual([]);
+	});
+});
+
+describe("windowsApplicationName", () => {
+	it("已知 exe 用友好名称，认不出来的保留文件名", () => {
+		expect(windowsApplicationName("C:\\Program Files\\Microsoft VS Code\\Code.exe")).toBe("Visual Studio Code");
+		expect(windowsApplicationName("C:\\Users\\me\\scoop\\shims\\code.exe")).toBe("Visual Studio Code");
+		expect(windowsApplicationName("C:\\Tools\\Fork\\Fork.exe")).toBe("Fork");
+	});
+
+	it("友好名称仍能被归到正确分类", () => {
+		expect(inferApplicationKind(windowsApplicationName("C:\\Windows\\System32\\cmd.exe"))).toBe("terminal");
 	});
 });
 

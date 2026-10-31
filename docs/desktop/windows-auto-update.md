@@ -97,11 +97,12 @@ desktop/
 {
   "version": "0.5.56",
   "previousVersion": "0.5.55",
-  "pending": false
+  "pending": false,
+  "attempts": 0
 }
 ```
 
-`pending: true` 表示新版本已经激活但还没完成健康确认。稳定启动器发现 pending 时会优先回退 `previousVersion`；新版本进入 `onAppReady` 后把 pending 改为 false。
+`pending: true` 表示新版本已经激活但还没完成健康确认。此时稳定启动器**仍然先启动新版本**，只把 `attempts` 加一：`pending` 描述的是“刚切过去、还没报到健康”，不是“上一次启动失败”。只有新版本目录不完整（说明安装没写全），或 `attempts` 已达上限（新版本连续多次启动都没有走到 `onAppReady`）才回退 `previousVersion`。新版本进入 `onAppReady` 后把 `pending` 改为 false 并把 `attempts` 清零。
 
 ### 4.3 差分下载缓存
 
@@ -160,11 +161,13 @@ Windows 自定义流程把进度划分为：
 
 点击“更新并重启”不会再次运行安装程序。此时完整版本目录已经准备好，激活动作只做三件事：
 
-1. 原子写入 `%LOCALAPPDATA%\Astravia\current.json`，记录新旧版本并设 `pending=true`。
+1. 原子写入 `%LOCALAPPDATA%\Astravia\current.json`，记录新旧版本并设 `pending=true`、`attempts=0`。
 2. 使用 `app.relaunch({ execPath: <new Astravia.exe> })` 启动新版本。
-3. 退出旧版本。
+3. 走正常退出流程让 relauncher 把新版本拉起来；最后用 8 秒看门狗兜底强制退出，避免退出钩子卡住时旧进程常驻。
 
-如果新版本在健康确认前退出，用户下次从桌面快捷方式启动时，稳定启动器读取到 pending 并回退上一版本。
+退出必须是正常 quit 而不是直接终结进程：`app.exit()` 会跳过 relauncher，新版本永远不会被拉起，而后台版本目录已经准备好，用户重开时又会被当成失败回滚，形成“更新装完了还是旧版”的死循环。
+
+`app.relaunch` 万一没生效也不影响收敛：指针仍是 `pending version=<新版本>`，用户从桌面快捷方式启动时稳定启动器先跑新版本，`attempts` 从 0 起算。两条路都落到新版本。只有新版本连续多次启动都没完成健康确认（默认 2 次）才回退上一版本，并清理 `pending`。
 
 ### 5.4 旧版本清理
 

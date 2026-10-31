@@ -75,6 +75,26 @@ pending 目录里先按清单资产名找；清单同时列出 x64 与 arm64 两
 - 判定依赖 `codesign` 输出文本。Apple 若改变措辞，会退化成「按已签名处理」→ 回到 Squirrel 失败的老症状；因此判定同时检查「没有 `Authority=Developer ID Application`」这条正向条件，不只看负面标记。
 - 仍然**不**解决「未签名包在别人机器上首次打开被 Gatekeeper 拦截」——那是分发侧问题（需要公证），与升级路径无关。
 
+## 修订（2026-10-31）：判定改为偏好位，交棒结果改为三态
+
+实机验证推翻了两处实现假设，决策本身不变，但判定与交棒语义按下面的方式收敛。
+
+**一、探针只决定顺序，不决定可选性。** 原实现把 `isUnsignedMacBundle` 当作开关：判为已签名就完全不准备内置通道。实际观测到同一台机器上 shell 里 `codesign -dv` 明确输出 `adhoc,linker-signed`，而运行时判定却走了 Squirrel，于是 `quitAndInstall` 交给 ShipIt、15 秒后拿不到作业、旧代码 `app.exit(0)`——应用退出、什么都没装、重开还是旧版，日志只有一行 `installer handoff: job-missing; exiting so the installer can replace the app`。
+
+现在探针改名为 `inspectMacBundleSignature()`，只产出 `{ unsigned, reason }` 并折成 `preferBuiltIn` 偏好位，**只决定先走哪条路**。交棒返回三态：
+
+| verdict | 含义 | 后续 |
+| --- | --- | --- |
+| `started` | 安装器已接管 | 正常退出 |
+| `exiting` | 交棒方自己负责退出 | 引擎不再操作生命周期 |
+| `unavailable` | 没接管 | **不信任探针**，重新定位待装 ZIP：有则内置安装器，无则抛错 |
+
+判据也从解析 `codesign` 文本改为结构检查：缺 `Contents/_CodeSignature/CodeResources` 直接判未签名，`codesign` 用绝对路径 `/usr/bin/codesign`，spawn 报错或空 stdout 一律按未签名处理。文本措辞变化不再能把结论翻成「已签名」。`isUnsignedMacBundle()` 保留为 `inspectMacBundleSignature().unsigned` 的薄包装，调用方按需取布尔值。
+
+**二、找不到 ZIP 曾经会静默退出。** 原「未签名通道找不到 ZIP 直接抛错」只覆盖了探针判对的情况；探针判错时走的是 Squirrel 分支的 `job-missing → exit(0)`，没有任何错误上报。现在 `unavailable` 之后必须二选一：装上，或者抛 `macOS installer did not take over and no staged archive is available` / `... and no built-in installer is available`，由 `UpdaterService.install()` 落成可见错误。
+
+**三、待装归档的搜索范围要覆盖缓存根。** 差分下载会在 `~/Library/Caches/astravia-updater/` 根目录留一份 `update.zip`（实测 270MB），只有 `pending/` 子目录里才是清单资产名的精确命中。搜索顺序：`pending/<资产名>` → `pending` 里最新 `.zip` → 缓存根最新 `.zip`。
+
 ## 备选方案
 
 - **只做检测不做安装**：即当前行为，用户诉求未解决。
@@ -99,4 +119,4 @@ pending 目录里先按清单资产名找；清单同时列出 x64 与 arm64 两
 
 自动化只能覆盖到「脚本在临时目录里正确换包」。真实替换 `/Applications/Astravia.app` 属破坏性操作且会动到正在运行的应用，本轮**未**在本机执行；实机升级效果待下一次发版由用户确认。若失败，唯一证据是 `~/Library/Caches/astravia-updater/install-*.log`。
 
-参考：[ADR-0124](../adr/0124-remote-project-ssh-helper.md)（另一条跨进程交棒链路）、`apps/desktop/src/main/mac-installer-handoff.ts`（Squirrel 通道的 launchd 交棒细节）。
+参考：[ADR-0124](0124-ssh-remote-projects-and-execution-boundary.md)（另一条跨进程交棒链路）、`apps/desktop/src/main/mac-installer-handoff.ts`（Squirrel 通道的 launchd 交棒细节）。

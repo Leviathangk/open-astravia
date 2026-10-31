@@ -8,7 +8,8 @@ macOS 当前采用以下组合：
 
 - `electron-updater` 的 `MacUpdater`：检查 `latest-mac.yml`、版本比较、SHA-512 校验、blockmap 差分下载和下载缓存。
 - Squirrel.Mac（Electron 内置 `autoUpdater`）：解包暂存新版本、验签、重启时原地替换 `.app`。
-- Developer ID 签名 + 公证：**不是可选项**，未签名的应用 Squirrel.Mac 直接拒绝工作。
+- 内置安装器（`mac-unsigned-installer.ts`）：Squirrel 交棒失败时的兜底通道，自己解包 ZIP、等待进程退出、原地替换 `.app` 并重启（见 [`ADR-0153`](../adr/0153-unsigned-macos-inplace-update.md)）。
+- Developer ID 签名 + 公证：正式渠道包必须做。未签名包交给 Squirrel 必然验签失败，此时走内置安装器而不是直接把应用退出。
 - R2 + Cloudflare 自定义域名：官方版本的静态更新源。
 - GitHub Releases：开源版本可选更新源。
 
@@ -29,9 +30,9 @@ macOS 需要发布两种产物：**ZIP 供自动更新**（Squirrel.Mac 只认 Z
 
 ### 2.2 当前边界
 
-- **没有失败回退**。Windows 有版本目录 + `pending` 指针，新版本启动失败可回退上一版；Squirrel.Mac 是原地替换，装坏了只能重装。
+- **只有替换层面的回退，没有版本层面的回退**。Windows 有版本目录 + `pending` 指针，新版本起不来可以退回上一版；macOS 是原地替换，脚本第 4 步替换失败会把旧包改名还原，但新版本自己崩溃不会自动降级。
 - **暂存阶段没有进度**。Squirrel.Mac 不上报解包与验签进度，UI 停在 90%（见 5.2）。
-- **未签名包完全不可更新**。开发或 `workflow_dispatch` 出的未签名测试包只能用于验证构建链路，不能验证更新。
+- **未签名包不能靠 Squirrel 更新**。开发或 `workflow_dispatch` 出的未签名测试包会落到内置安装器通道：能装上，但没有差分更新，且替换发生在退出之后，失败只留日志。
 - 新旧版本必须使用**同一个 Developer ID 身份和一致的 bundle identifier**，换证书等于断开更新链。
 - 自动降级关闭（`allowDowngrade=false`），同版本或更低版本不会被识别为更新。
 - 出问题只能停止分发清单并发布更高版本，不能用同一版本号覆盖二进制。
@@ -88,6 +89,17 @@ desktop/
   -> 收到原生 update-downloaded 事件
   -> 状态变为 ready，提示更新并重启                 [100%]
   -> quitAndInstall：Squirrel 原地替换 .app 并重启
+```
+
+交棒结果不是二选一，而是三态（`started` / `exiting` / `unavailable`）：
+
+```text
+  -> quitAndInstall
+     -> 交给 Squirrel（launchd 作业 com.astravia.desktop.ShipIt）
+        -> started  ：作业已接管，退出即可
+        -> unavailable：验签失败等，重新定位待装 ZIP
+           -> 有 ZIP：内置安装器替换 .app 并重启
+           -> 无 ZIP：报错保持运行，绝不静默退出
 ```
 
 ### 5.1 检查和自动重试

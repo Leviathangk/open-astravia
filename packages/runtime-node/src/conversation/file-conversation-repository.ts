@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, type FileHandle, mkdir, open, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, type FileHandle, mkdir, open, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
 	applyConversationDocumentCommand,
@@ -209,6 +209,7 @@ export class FileConversationRepository
 					revision: result.document.revision,
 					command,
 				};
+				await this.assertAppendBase(sessionId);
 				await appendFile(this.conversationPath(sessionId), serializeConversationLine(record), "utf8");
 				return result;
 			}),
@@ -352,6 +353,7 @@ export class FileConversationRepository
 
 				await this.ensureRoot();
 				let targetPublished = false;
+				let sourceMarked = false;
 				try {
 					await publishConversationFileExclusive(
 						sessionPath,
@@ -362,7 +364,7 @@ export class FileConversationRepository
 						].join(""),
 					);
 					targetPublished = true;
-					await appendFile(sourceSessionPath, serializeConversationLine(transferredRecord), "utf8");
+					sourceMarked = await this.markTransferredTurn(sourceSessionPath, transferredRecord);
 				} catch (error) {
 					if (targetPublished) await rm(sessionPath, { force: true });
 					throw error;
@@ -371,7 +373,8 @@ export class FileConversationRepository
 				return {
 					sourceSessionId: input.sourceSessionId,
 					sourceSessionPath,
-					sourceVersion: input.expectedVersion + 1,
+					// 源文件在交棒期间被删掉时不能谎报版本：标记没写进去，源就还停在原版本。
+					sourceVersion: sourceMarked ? input.expectedVersion + 1 : input.expectedVersion,
 					sessionId,
 					sessionDirectory: this.rootDir,
 					sessionPath,
@@ -427,6 +430,7 @@ export class FileConversationRepository
 					document = applyStoredEventToConversationDocument(document, event, sequence, documentEntry ?? undefined);
 					return record;
 				});
+				await this.assertAppendBase(sessionId);
 				await appendFile(this.conversationPath(sessionId), records.map(serializeConversationLine).join(""), "utf8");
 				return {
 					version: expectedVersion + events.length,
@@ -523,6 +527,62 @@ export class FileConversationRepository
 		if (!entry) return;
 		this.parsedFiles.delete(sessionId);
 		this.cachedBytes -= entry.offset;
+	}
+
+	/**
+	 * 追写前确认基底仍是同一个会话文件。
+	 *
+	 * `appendFile` 在目标文件已被别的写入者删除或改名后会**新建**一个没有文件头的
+	 * 文件：那之后这个会话既读不出历史，也不会再出现在侧栏里（列表要求文件头可读），
+	 * 磁盘上只剩一条孤儿记录，用户看到的就是「会话凭空消失」。宁可让本次追写失败、
+	 * 由上层重试或报错，也不要重建这种残档。
+	 */
+	private async assertAppendBase(sessionId: string): Promise<void> {
+		const path = this.conversationPath(sessionId);
+		let stats: Awaited<ReturnType<typeof stat>>;
+		try {
+			stats = await stat(path);
+		} catch (error) {
+			if (nodeErrorCode(error) !== "ENOENT") throw error;
+			this.forgetParsedFile(sessionId);
+			throw new ConversationStorageError(
+				CONVERSATION_STORAGE_ERROR_CODES.NOT_FOUND,
+				`Conversation disappeared before append: ${sessionId}`,
+				{ cause: error },
+			);
+		}
+		const cached = this.parsedFiles.get(sessionId);
+		if (!cached) return;
+		// inode 变了说明原文件被整体替换；长度回退说明被截断。两种情况下继续追写都会
+		// 把新记录接到别人的文件尾巴上（或重建残档），版本号也不再可信。
+		if (cached.ino !== stats.ino || stats.size < cached.offset) {
+			this.forgetParsedFile(sessionId);
+			throw new ConversationStorageError(
+				CONVERSATION_STORAGE_ERROR_CODES.CORRUPT,
+				`Conversation file was replaced or truncated during append: ${sessionId}`,
+			);
+		}
+	}
+
+	/**
+	 * 给源会话补一条「回合已转出」标记。
+	 *
+	 * 交棒期间源文件可能已被删除（用户删除、团队目录迁移）。此时直接 `appendFile`
+	 * 会造出一个没有文件头的孤儿文件——列表读不出它，用户以为会话丢了。放弃补标记
+	 * 只是少一条展示元数据，远好过凭空生成一个残档。
+	 */
+	private async markTransferredTurn(
+		sourceSessionPath: string,
+		transferredRecord: ConversationEventRecord,
+	): Promise<boolean> {
+		try {
+			await stat(sourceSessionPath);
+		} catch (error) {
+			if (nodeErrorCode(error) === "ENOENT") return false;
+			throw error;
+		}
+		await appendFile(sourceSessionPath, serializeConversationLine(transferredRecord), "utf8");
+		return true;
 	}
 
 	/**

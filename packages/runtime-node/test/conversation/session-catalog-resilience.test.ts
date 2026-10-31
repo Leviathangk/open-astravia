@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MessageAppendedEvent, TurnStartedEvent } from "@astravia/runtime-core/kernel";
@@ -32,6 +32,23 @@ describe("runtime session catalog listing", () => {
 		await rm(sessionPath, { force: true });
 
 		expect(await catalog.listSessions(cwd, rootDir)).toEqual([]);
+	});
+
+	it("keeps a header-less remnant of a conversation listed and deletable", async () => {
+		const { catalog, cwd, rootDir, sessionPath } = await seedSession("headerless");
+		// 复现实机残档：文件被并发删除/迁移打断后，磁盘上只剩一条没有文件头的记录。
+		const lines = (await readFile(sessionPath, "utf8")).split("\n").filter(Boolean);
+		await writeFile(sessionPath, `${lines[lines.length - 1]}\n`, "utf8");
+		await writeFile(`${sessionPath}.queue.json`, '{"paused":false,"entries":[]}', "utf8");
+
+		const sessions = await catalog.listSessions(cwd, rootDir);
+		expect(sessions.map(({ id }) => id)).toEqual(["headerless"]);
+		expect(sessions[0]?.path).toBe(sessionPath);
+
+		await catalog.deleteSessionArtifacts(sessionPath);
+		expect(await catalog.listSessions(cwd, rootDir)).toEqual([]);
+		// 未发送输入队列是独立 sidecar，必须跟着主文件一起清掉，否则会留成永久孤儿。
+		await expect(stat(`${sessionPath}.queue.json`)).rejects.toThrow();
 	});
 
 	it("re-reads a file that changed instead of serving the cached projection", async () => {

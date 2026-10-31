@@ -1,6 +1,6 @@
 {
 	"name": "@astravia/desktop",
-	"version": "0.5.82",
+	"version": "0.5.83",
 	"description": "Astravia Desktop App",
 	"author": "Astravia",
 	"type": "module",
@@ -280,6 +280,8 @@
 		"@lydell/node-pty-linux-x64": "1.0.2",
 		"@lydell/node-pty-win32-arm64": "1.0.2",
 		"@lydell/node-pty-win32-x64": "1.0.2",
+		"sherpa-onnx-darwin-arm64": "1.13.5",
+		"sherpa-onnx-darwin-x64": "1.13.5",
 		"sherpa-onnx-win-x64": "1.13.5"
 	}
 }

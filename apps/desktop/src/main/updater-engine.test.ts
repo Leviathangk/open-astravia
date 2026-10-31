@@ -55,7 +55,7 @@ describe("ElectronUpdaterEngine", () => {
 	// 交棒后必须再等安装器接手才结束进程：立刻硬 exit 会赶在 Squirrel 提交 launchd
 	// 作业之前（实测 41ms），而完全不 exit 则本进程挂着 sidecar 等句柄不会自行退出，
 	// launchd 又要等目标退出才 spawn ShipIt——两种都实测失败过。
-	it("finalizes the quit only after the installer has been handed control", async () => {
+	it("hands the quit to the installer before exiting", async () => {
 		const order: string[] = [];
 		const updater = {
 			on: vi.fn(),
@@ -67,14 +67,20 @@ describe("ElectronUpdaterEngine", () => {
 			prepare: () => {
 				order.push("prepare");
 			},
-			finalize: async () => {
-				order.push("finalize");
+			handOff: async (mode) => {
+				order.push(`handOff:${mode}`);
+				return "started";
+			},
+			exit: (code) => {
+				order.push(`exit:${code}`);
 			},
 		});
 
 		await engine.quitAndInstall();
 
-		expect(order).toEqual(["prepare", "quitAndInstall", "finalize"]);
+		// 不带 mac 安装目标时：macOS 仍可能交给 Squirrel，其余平台走 electron-updater。
+		const mode = process.platform === "darwin" ? "mac-squirrel" : "electron-updater";
+		expect(order).toEqual(["prepare", "quitAndInstall", `handOff:${mode}`, "exit:0"]);
 	});
 
 	it("marks the app as quitting before activating the Inno update", async () => {
@@ -103,21 +109,26 @@ describe("ElectronUpdaterEngine", () => {
 		const prepareQuit = vi.fn(() => {
 			order.push("prepareQuit");
 		});
-		// Windows 也必须走 finalize：activate() 只是 app.relaunch() + app.quit()，
-		// 而 before-quit 在清理跑过后是直通的，没人再兜底 app.exit(0)；进程挂着
-		// sidecar 等句柄不会自行退出，relaunch 也就永远不生效。
-		const finalizeQuit = vi.fn(async () => {
-			order.push("finalize");
+		// Windows 后台更新必须走正常 quit 流程：`app.relaunch()` 只在 quit 路径 spawn，
+		// 以前在这里直接 `app.exit(0)` 把刚登记的 relaunch 吞掉，指针指向新版但新进程
+		// 从未启动，用户重开时 launcher 又按 pending 回滚成旧版。
+		const handOff = vi.fn(async (mode: string) => {
+			order.push(`handOff:${mode}`);
+			return "exiting" as const;
 		});
+		const exit = vi.fn();
 		const engine = new ElectronUpdaterEngine(updater, innoUpdate, undefined, {
 			prepare: prepareQuit,
-			finalize: finalizeQuit,
+			handOff,
+			exit,
 		});
 
 		await engine.checkForUpdates();
 		await engine.quitAndInstall();
 
-		expect(order).toEqual(["prepareQuit", "activate", "finalize"]);
+		expect(order).toEqual(["prepareQuit", "activate", "handOff:windows-inno"]);
+		// 退出已交给 handOff（它负责 app.quit + 宽限硬退），引擎不能再抢一步 exit。
+		expect(exit).not.toHaveBeenCalled();
 	});
 
 	it("waits for Squirrel.Mac to stage the update before reporting download completion", async () => {
@@ -219,6 +230,7 @@ describe("ElectronUpdaterEngine", () => {
 			{
 				appPath: "/Applications/Astravia.app",
 				cacheRoot: join(root, "cache"),
+				preferBuiltIn: true,
 				launch,
 			},
 		);
@@ -238,6 +250,70 @@ describe("ElectronUpdaterEngine", () => {
 		});
 		// 绝不能再交给 Squirrel：那条路对未签名包必然失败。
 		expect(vi.mocked(updater.quitAndInstall)).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the built-in installer when the Squirrel handoff never starts", async () => {
+		// 实测失败形态：验签失败 → ShipIt 作业没提交 → handOff 返回 job-missing。
+		// 旧实现此时直接 app.exit(0)，用户看到的就是「应用退出、什么都没装、重开还是旧版」。
+		const root = await mkdtemp(join(tmpdir(), "astravia-unsigned-engine-"));
+		temporaryRoots.push(root);
+		const pendingDir = join(root, "pending");
+		await mkdir(pendingDir, { recursive: true });
+		const assetName = "Astravia-1.2.3-arm64-mac.zip";
+		await writeFile(join(pendingDir, assetName), "zip-bytes", "utf8");
+
+		const updateInfo: UpdateInfo = {
+			version: "1.2.3",
+			files: [{ url: assetName, sha512: "hash", size: 42 }],
+			path: assetName,
+			sha512: "zip",
+			releaseDate: new Date().toISOString(),
+		};
+		const updater = {
+			on: vi.fn(),
+			off: vi.fn(),
+			checkForUpdates: vi.fn().mockResolvedValue({ isUpdateAvailable: true, updateInfo }),
+			downloadUpdate: vi.fn().mockResolvedValue([join(pendingDir, assetName)]),
+			quitAndInstall: vi.fn(),
+			updateInfoAndProvider: { provider: { resolveFiles: vi.fn().mockReturnValue([]) } },
+			downloadedUpdateHelper: { cacheDir: root, cacheDirForPendingUpdate: pendingDir },
+		} as unknown as AppUpdater;
+		const launch = vi.fn().mockResolvedValue("/cache/install.sh");
+		const order: string[] = [];
+		const engine = new ElectronUpdaterEngine(
+			updater,
+			undefined,
+			undefined,
+			{
+				prepare: () => {
+					order.push("prepare");
+				},
+				handOff: async (mode) => {
+					order.push(`handOff:${mode}`);
+					return mode === "mac-squirrel" ? "unavailable" : "started";
+				},
+				exit: () => {
+					order.push("exit");
+				},
+			},
+			{
+				appPath: "/Applications/Astravia.app",
+				cacheRoot: join(root, "cache"),
+				// 探针漏判（实测发生过）：先走 Squirrel，交棒失败后才回退。
+				preferBuiltIn: false,
+				launch,
+			},
+		);
+
+		await engine.checkForUpdates();
+		await expect(engine.downloadUpdate(vi.fn()).promise).resolves.toEqual([join(pendingDir, assetName)]);
+		await engine.quitAndInstall();
+
+		// 内置安装器必须真的被拉起来，而且进程最后才算退出。
+		expect(launch).toHaveBeenCalledWith(
+			expect.objectContaining({ appPath: "/Applications/Astravia.app", archivePath: join(pendingDir, assetName) }),
+		);
+		expect(order).toEqual(["prepare", "handOff:mac-squirrel", "handOff:mac-built-in", "exit"]);
 	});
 
 	it("installs an unsigned bundle when Squirrel only reports an error event", async () => {
@@ -277,6 +353,7 @@ describe("ElectronUpdaterEngine", () => {
 			{
 				appPath: "/Applications/Astravia.app",
 				cacheRoot: join(root, "cache"),
+				preferBuiltIn: true,
 				launch,
 			},
 		);
@@ -312,10 +389,11 @@ describe("ElectronUpdaterEngine", () => {
 			updater,
 			undefined,
 			undefined,
-			{ prepare: vi.fn(), finalize: vi.fn() },
+			{ prepare: vi.fn(), handOff: vi.fn() },
 			{
 				appPath: "/Applications/Astravia.app",
 				cacheRoot: join(root, "cache"),
+				preferBuiltIn: true,
 				launch,
 			},
 		);
@@ -357,6 +435,7 @@ describe("ElectronUpdaterEngine", () => {
 			{
 				appPath: "/Applications/Astravia.app",
 				cacheRoot: join(root, "cache"),
+				preferBuiltIn: true,
 				launch,
 			},
 		);

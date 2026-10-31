@@ -14,13 +14,19 @@ import {
 	resolveInnoUpdateStoreRoot,
 } from "./inno-windows-update.js";
 import { handOffToInstaller, MACOS_SHIPIT_JOB_LABEL } from "./mac-installer-handoff.js";
-import { isUnsignedMacBundle } from "./mac-unsigned-installer.js";
+import { inspectMacBundleSignature } from "./mac-unsigned-installer.js";
 import { runQuitCleanup } from "./quit-cleanup.js";
 import { markPendingUpdateRelaunch } from "./update-relaunch-marker.js";
-import { ElectronUpdaterEngine } from "./updater-engine.js";
+import { ElectronUpdaterEngine, type UpdateHandoffResult, type UpdateInstallMode } from "./updater-engine.js";
 import { type UpdaterPhase, UpdaterService, type UpdaterState } from "./updater-service.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Windows 后台更新的退出宽限：正常 quit 才会 spawn relauncher，但 sidecar 句柄
+ * 可能把退出拖死，超过这个时长就硬退（此时 relaunch 已失效，指针留到下次启动）。
+ */
+const WINDOWS_QUIT_WATCHDOG_MS = 8_000;
 
 export type { UpdaterPhase, UpdaterState };
 
@@ -92,51 +98,74 @@ const nativeMacUpdateEvents =
 				},
 			}
 		: undefined;
+/** `getAppPath()` 在打包后指向 `Contents/Resources/app.asar`，不是 bundle 本身。 */
+function resolveMacBundlePath(): string {
+	// 可执行文件固定是 `Contents/MacOS/<name>`，向上三级才是 `<name>.app`。
+	return dirname(dirname(dirname(app.getPath("exe"))));
+}
+
+/**
+ * 未签名（adhoc / linker-signed）包不能交给 Squirrel.Mac：它替换前会用当前包的
+ * 指定要求校验新包，而这类包连 CodeResources 都不完整，校验必然失败。此时改走
+ * 内置安装器（解包 + 原地替换），否则用户点多少次「更新」都停在同一个版本。
+ *
+ * 探针只决定**先用哪条路**，不决定「能不能装」：即便它漏判，交棒失败（job-missing）
+ * 时引擎仍会回退到内置安装器。
+ */
+const macBundlePath = process.platform === "darwin" ? resolveMacBundlePath() : undefined;
+const macSignature = macBundlePath ? inspectMacBundleSignature(macBundlePath) : undefined;
+const macInstallTarget =
+	macBundlePath && app.isPackaged
+		? {
+				appPath: macBundlePath,
+				cacheRoot: join(homedir(), "Library", "Caches", "astravia-updater"),
+				preferBuiltIn: macSignature?.unsigned === true,
+			}
+		: undefined;
+
 // 交棒前：标记 isQuitting（窗口 close 守卫只有看到它才真正销毁窗口），并跑完退出清理。
 const prepareQuit = async () => {
 	(app as typeof app & { isQuitting?: boolean }).isQuitting = true;
 	// 安装器会以守护进程身份把应用拉回来，那样起来的窗口不会自动到前台，
 	// 打个标记让下次启动主动抢焦点（见 update-relaunch-marker.ts）。
 	markPendingUpdateRelaunch(getAstraviaHomePath());
+	// 探针结论要在这里落日志：模块初始化时 logger sink 还没装好，会整行丢掉。
+	if (macSignature) {
+		console.info(
+			`[updater] macOS bundle signature: ${macSignature.unsigned ? "unsigned" : "signed"} (${macSignature.reason}); install path: ${macInstallTarget?.preferBuiltIn ? "built-in first" : "squirrel first"}`,
+		);
+	}
 	console.info("[updater] running quit cleanup before handing off to the installer");
 	await runQuitCleanup();
 };
 // 交棒后：等 Squirrel 把 ShipIt 的 launchd 作业提交上去，再硬结束本进程——
 // 本进程挂着 sidecar 等句柄不会自行退出，而 launchd 要等目标退出才 spawn ShipIt。
 // 三种失败模式与取舍见 mac-installer-handoff.ts。
-// 所有平台都必须走到最后的 app.exit(0)：before-quit 在清理跑过后是直通的，
-// 不再兜底硬退出，而本进程挂着 IM sidecar、uiohook、RPC server 等句柄，
-// Electron 的正常退出流程结束不了它。Windows 的 app.relaunch() 同样只在进程
-// 真正退出后才生效，不 exit 就是「指针切了、新版本起不来」。
-const finalizeQuit = async () => {
-	if (process.platform === "darwin") {
-		const result = await handOffToInstaller({ label: MACOS_SHIPIT_JOB_LABEL });
-		console.info(`[updater] installer handoff: ${result}; exiting so the installer can replace the app`);
+//
+// 返回值决定谁负责退出：
+// - Windows 后台更新必须走正常 quit 流程，`app.relaunch()` 只在 quit 路径 spawn，
+//   以前在这里直接 `app.exit(0)` 会把刚登记的 relaunch 整个吞掉，指针指向新版但
+//   新进程从未启动；用户重开时 launcher 又按 pending 把它回滚成旧版。
+// - macOS 交棒失败（`job-missing`）时返回 unavailable，让引擎改用内置安装器，
+//   而不是像旧实现那样什么也没装就退出。
+const handOff = async (mode: UpdateInstallMode): Promise<UpdateHandoffResult> => {
+	if (process.platform === "win32" && mode === "windows-inno") {
+		// 兜底：正常退出流程也可能被 sidecar 句柄拖死，8s 后硬退。
+		setTimeout(() => app.exit(0), WINDOWS_QUIT_WATCHDOG_MS).unref?.();
+		app.quit();
+		return "exiting";
 	}
-	app.exit(0);
+	if (process.platform === "darwin" && mode === "mac-squirrel") {
+		const result = await handOffToInstaller({ label: MACOS_SHIPIT_JOB_LABEL });
+		console.info(`[updater] installer handoff: ${result}`);
+		return result === "started" ? "started" : "unavailable";
+	}
+	return "started";
 };
-/**
- * 未签名（adhoc / linker-signed）包不能交给 Squirrel.Mac：它替换前会用当前包的
- * 指定要求校验新包，而这类包连 CodeResources 都不完整，校验必然失败。此时改走
- * 内置安装器（解包 + 原地替换），否则用户点多少次「更新」都停在同一个版本。
- */
-function resolveMacBundlePath(): string {
-	// `getAppPath()` 在打包后指向 `Contents/Resources/app.asar`，不是 bundle 本身。
-	// 可执行文件固定是 `Contents/MacOS/<name>`，向上三级才是 `<name>.app`。
-	return dirname(dirname(dirname(app.getPath("exe"))));
-}
 
-const macBundlePath = process.platform === "darwin" ? resolveMacBundlePath() : undefined;
-const macUnsignedInstall =
-	macBundlePath && app.isPackaged && isUnsignedMacBundle(macBundlePath)
-		? {
-				appPath: macBundlePath,
-				cacheRoot: join(homedir(), "Library", "Caches", "astravia-updater"),
-			}
-		: undefined;
-if (macUnsignedInstall) {
-	console.info("[updater] this build is unsigned; macOS updates will use the built-in installer");
-}
+const exitForInstall = (code: number) => {
+	app.exit(code);
+};
 
 const updaterEngine = new ElectronUpdaterEngine(
 	autoUpdater,
@@ -144,9 +173,10 @@ const updaterEngine = new ElectronUpdaterEngine(
 	nativeMacUpdateEvents,
 	{
 		prepare: prepareQuit,
-		finalize: finalizeQuit,
+		handOff,
+		exit: exitForInstall,
 	},
-	macUnsignedInstall,
+	macInstallTarget,
 );
 // powerMonitor 只能在 app ready 之后订阅，因此这里只传订阅函数，
 // 由 UpdaterService.onAppReady() 在合适的时机调用。

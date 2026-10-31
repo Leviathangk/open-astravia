@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
 	createMacUnsignedInstallScript,
+	inspectMacBundleSignature,
 	installerLogPath,
 	isUnsignedMacBundle,
 	launchMacUnsignedInstaller,
@@ -195,6 +196,16 @@ describe("mac unsigned installer", () => {
 	it("treats an ad-hoc bundle as one Squirrel cannot verify", () => {
 		// 不依赖本机签名状态：只验证判定函数在「无 Developer ID」时返回 true。
 		expect(isUnsignedMacBundle("/nonexistent/Astravia.app")).toBe(process.platform === "darwin");
+	});
+
+	it("reports why a bundle cannot be handed to Squirrel", () => {
+		// 探针结论要能落到日志：真实发布包报的正是「没有 CodeResources」。
+		const report = inspectMacBundleSignature("/nonexistent/Astravia.app");
+		if (process.platform !== "darwin") {
+			expect(report.unsigned).toBe(false);
+			return;
+		}
+		expect(report).toEqual({ unsigned: true, reason: "no Contents/_CodeSignature/CodeResources" });
 	});
 
 	it("keeps the log next to the script", () => {

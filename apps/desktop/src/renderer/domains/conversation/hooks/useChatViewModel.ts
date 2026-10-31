@@ -198,7 +198,8 @@ export function useChatViewModel(): ChatViewModelResult {
 	return {
 		actions,
 		model: {
-			cwd: activeSessionCwd,
+			// 未绑定会话（新建页）时回退到默认工作区，否则「在外部应用打开工作区」只启动应用、不带目录。
+			cwd: activeSessionCwd ?? defaultCwd,
 			exporting,
 			exportTitle: sessionTitle ?? t("chatView.defaultSessionTitle"),
 			header,

@@ -645,6 +645,35 @@ describe("FileConversationRepository", () => {
 		});
 	});
 
+	it("refuses to append when the conversation file vanished mid-turn", async () => {
+		const { repository } = await createRepository();
+		await repository.create({ sessionId: "session-1", createdAt: 100 });
+		// 让第一次读取把文件登记进解析缓存，再模拟另一个写入者把文件删掉。
+		await repository.append("session-1", 0, [started("session-1", "turn-1")]);
+		await rm(repository.resolveConversationPath("session-1"), { force: true });
+
+		await expect(repository.append("session-1", 1, [message("session-1", "turn-1", "hello")])).rejects.toMatchObject({
+			code: CONVERSATION_STORAGE_ERROR_CODES.NOT_FOUND,
+		});
+		// 关键回归点：追写失败后不能在磁盘上留下一个没有文件头的孤儿文件。
+		await expect(readFile(repository.resolveConversationPath("session-1"), "utf8")).rejects.toThrow();
+	});
+
+	it("refuses to append when the conversation file was replaced underneath", async () => {
+		const { repository } = await createRepository();
+		await repository.create({ sessionId: "session-1", createdAt: 100 });
+		await repository.append("session-1", 0, [started("session-1", "turn-1")]);
+		const path = repository.resolveConversationPath("session-1");
+		// 改名换入另一个文件：inode 变了，追写会把新记录接到别人的尾巴上。
+		await writeFile(`${path}.next`, "", "utf8");
+		await rm(path, { force: true });
+		await writeFile(path, await readFile(`${path}.next`, "utf8"), "utf8");
+
+		await expect(repository.append("session-1", 1, [message("session-1", "turn-1", "hello")])).rejects.toMatchObject({
+			code: CONVERSATION_STORAGE_ERROR_CODES.CORRUPT,
+		});
+	});
+
 	it("rejects operations after close", async () => {
 		const { repository } = await createRepository();
 		await repository.create({

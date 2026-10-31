@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { chmod, mkdir, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 
 /**
  * 未签名 macOS 包的原地升级。
@@ -123,20 +124,51 @@ echo "[$(date -u +%FT%TZ)] relaunched"
 }
 
 /**
+ * 一个 bundle 的签名结论。`reason` 只用于日志：这条链路的失败无法在用户机器上
+ * 复现成探针输出，必须把判断依据写进日志。
+ */
+export interface MacBundleSignature {
+	unsigned: boolean;
+	reason: string;
+}
+
+const CODESIGN_BINARY = "/usr/bin/codesign";
+const CODE_RESOURCES_PATH = "Contents/_CodeSignature/CodeResources";
+const DEVELOPER_ID_AUTHORITY = "Authority=Developer ID Application";
+
+/**
  * 判断一个 macOS bundle 是否**不能**交给 Squirrel.Mac：未签名、adhoc 或
  * linker-signed 的包在替换前的签名校验必然失败。
+ *
+ * 主判据是 `Contents/_CodeSignature/CodeResources` 是否存在——Squirrel 报的正是
+ * `code has no resources but signature indicates they must be present`，而实机
+ * 发布包（`flags=0x20002(adhoc,linker-signed)`）确实没有这个目录。codesign 输出
+ * 只作辅助：spawn 失败、没有输出、或拿不到 Developer ID 授权一律按未签名处理，
+ * 宁可用内置安装器把自己换成新包，也不要交给一条必然失败的通道。
  */
-export function isUnsignedMacBundle(bundlePath: string): boolean {
-	if (process.platform !== "darwin") return false;
-	const result = spawnSync("codesign", ["-dv", "--verbose=2", bundlePath], { encoding: "utf-8" });
-	// codesign 把详情写 stderr；未签名的包直接失败，两个流都要看。
-	const output = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
-	if (result.status !== 0 && !output.includes("code object is not signed")) {
-		if (output.trim().length === 0) return true;
+export function inspectMacBundleSignature(bundlePath: string): MacBundleSignature {
+	if (process.platform !== "darwin") return { unsigned: false, reason: "not macOS" };
+	if (!existsSync(join(bundlePath, CODE_RESOURCES_PATH))) {
+		return { unsigned: true, reason: `no ${CODE_RESOURCES_PATH}` };
 	}
-	if (output.includes("code object is not signed")) return true;
-	if (output.includes("linker-signed") || output.includes("adhoc")) return true;
-	return !output.includes("Authority=Developer ID Application");
+	const result = spawnSync(CODESIGN_BINARY, ["-dv", "--verbose=2", bundlePath], { encoding: "utf-8" });
+	if (result.error || !result.stdout) {
+		const detail = result.error instanceof Error ? result.error.message : "codesign produced no output";
+		return { unsigned: true, reason: `codesign unavailable: ${detail}` };
+	}
+	// codesign 把详情写 stderr；未签名的包直接失败，两个流都要看。
+	const output = `${result.stderr ?? ""}\n${result.stdout}`;
+	if (output.includes("code object is not signed")) return { unsigned: true, reason: "code object is not signed" };
+	if (output.includes("linker-signed")) return { unsigned: true, reason: "linker-signed" };
+	if (output.includes("adhoc")) return { unsigned: true, reason: "adhoc signature" };
+	if (!output.includes(DEVELOPER_ID_AUTHORITY)) {
+		return { unsigned: true, reason: "no Developer ID authority" };
+	}
+	return { unsigned: false, reason: "Developer ID signed" };
+}
+
+export function isUnsignedMacBundle(bundlePath: string): boolean {
+	return inspectMacBundleSignature(bundlePath).unsigned;
 }
 
 export interface MacUnsignedInstallRequest {

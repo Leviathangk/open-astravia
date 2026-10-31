@@ -19,6 +19,7 @@ function actions(): ActivityPanelActions {
 	return {
 		onAttachTab: vi.fn(),
 		onClose: vi.fn(),
+		onCloseTabs: vi.fn(),
 		onFloatingResize: vi.fn(),
 		onFloatingResizeEnd: vi.fn(),
 		onFloatingTabDragEnd: vi.fn(),

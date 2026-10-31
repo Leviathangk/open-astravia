@@ -1,5 +1,5 @@
 import type { SpeechInputErrorCode, SpeechInputStatus } from "@preload/api";
-import { isWindows } from "@shared/lib/platform";
+import { isSpeechInputPlatform } from "@shared/lib/platform";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { isSpeechInputBuildEnabled } from "@/shared/feature-flags";
@@ -22,7 +22,7 @@ export function useSpeechInput(enabled: boolean): SpeechInputModel {
 	const busyRef = useRef(false);
 
 	useEffect(() => {
-		if (!buildEnabled || !isWindows) return;
+		if (!buildEnabled || !isSpeechInputPlatform) return;
 		let active = true;
 		const unsubscribe = window.astravia.speechInput.onEvent((event) => {
 			if (!active) return;
@@ -60,7 +60,7 @@ export function useSpeechInput(enabled: boolean): SpeechInputModel {
 	}, []);
 
 	const toggle = useCallback(async (): Promise<void> => {
-		if (!buildEnabled || !enabled || !isWindows) return;
+		if (!buildEnabled || !enabled || !isSpeechInputPlatform) return;
 		if (busyRef.current) return;
 		busyRef.current = true;
 		try {
@@ -135,7 +135,7 @@ export function useSpeechInput(enabled: boolean): SpeechInputModel {
 					? titleByPhase[status.phase]
 					: null;
 		return {
-			visible: buildEnabled && isWindows,
+			visible: buildEnabled && isSpeechInputPlatform,
 			active: status.phase === "listening",
 			disabled:
 				!enabled || status.phase === "unavailable" || status.phase === "loading" || status.phase === "stopping",

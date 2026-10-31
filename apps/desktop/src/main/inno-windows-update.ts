@@ -37,6 +37,8 @@ interface VersionPointer {
 	version: string;
 	previousVersion?: string;
 	pending?: boolean;
+	/** 启动器累计的启动次数：应用没报到健康之前清零不了它。 */
+	attempts?: number;
 }
 
 export interface InnoUpdateAsset {
@@ -73,10 +75,17 @@ function parsePointer(value: unknown): VersionPointer | null {
 		return null;
 	}
 	if (record.pending !== undefined && typeof record.pending !== "boolean") return null;
+	if (
+		record.attempts !== undefined &&
+		(typeof record.attempts !== "number" || !Number.isSafeInteger(record.attempts) || record.attempts < 0)
+	) {
+		return null;
+	}
 	return {
 		version: record.version,
 		previousVersion: record.previousVersion,
 		pending: record.pending,
+		attempts: record.attempts,
 	};
 }
 
@@ -351,6 +360,8 @@ export class InnoWindowsUpdateController {
 			version: prepared.version,
 			previousVersion: this.runtime.currentVersion,
 			pending: true,
+			// 启动器把 pending 当成「先跑新版本」，这里从 0 起算尝试次数。
+			attempts: 0,
 		});
 		this.runtime.relaunch(prepared.executablePath);
 		this.runtime.quit();
@@ -360,7 +371,7 @@ export class InnoWindowsUpdateController {
 		const pointerPath = join(this.runtime.storeRoot, "current.json");
 		const pointer = await readPointer(pointerPath);
 		if (!pointer || pointer.version !== this.runtime.currentVersion) return;
-		if (pointer.pending) await writePointer(pointerPath, { ...pointer, pending: false });
+		if (pointer.pending) await writePointer(pointerPath, { ...pointer, pending: false, attempts: 0 });
 		await this.cleanupVersions(pointer);
 	}
 

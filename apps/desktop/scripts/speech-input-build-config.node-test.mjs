@@ -13,6 +13,7 @@ test("enables speech input by default for Windows x64 targets", () => {
 			targetSupported: true,
 			enabled: true,
 			platformTags: ["win32-x64"],
+			nativeModules: ["sherpa-onnx-win-x64"],
 		},
 	);
 });
@@ -28,6 +29,7 @@ test("disables speech input explicitly without changing the target", () => {
 			targetSupported: true,
 			enabled: false,
 			platformTags: ["win32-x64"],
+			nativeModules: ["sherpa-onnx-win-x64"],
 		},
 	);
 });
@@ -35,11 +37,24 @@ test("disables speech input explicitly without changing the target", () => {
 test("keeps speech input disabled for unsupported targets", () => {
 	const config = resolveSpeechInputBuildConfig({
 		env: { ASTRAVIA_SPEECH_INPUT_ENABLED: "true" },
-		platformTags: ["darwin-arm64"],
+		platformTags: ["linux-x64"],
 	});
 	assert.equal(config.configuredEnabled, true);
 	assert.equal(config.targetSupported, false);
 	assert.equal(config.enabled, false);
+});
+
+test("enables speech input for every bundled desktop target", () => {
+	for (const platformTag of ["win32-x64", "darwin-arm64", "darwin-x64"]) {
+		assert.equal(resolveSpeechInputBuildConfig({ env: {}, platformTags: [platformTag] }).enabled, true, platformTag);
+	}
+});
+
+test("enables speech input when any target in the build matrix is supported", () => {
+	assert.equal(
+		resolveSpeechInputBuildConfig({ env: {}, platformTags: ["linux-x64", "darwin-arm64"] }).enabled,
+		true,
+	);
 });
 
 test("rejects ambiguous feature flag values", () => {

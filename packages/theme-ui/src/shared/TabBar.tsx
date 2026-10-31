@@ -71,6 +71,11 @@ export interface TabBarProps<T extends string> {
 	onOverflowChange?: (overflowKeys: T[]) => void;
 	/** 文件拖拽悬停到非激活页签时切换页签，供内容区接管后续 drop。 */
 	activateOnFileDragHover?: boolean;
+	/**
+	 * 页签右键菜单：组件只上抛 key 与指针坐标，菜单内容由宿主渲染。
+	 * 未传时右键保持默认行为。
+	 */
+	onTabContextMenu?: (key: T, point: { x: number; y: number }) => void;
 }
 
 /** 左侧需避开内容卡片的 12px 圆角和激活页签向外延伸的连接弧。 */
@@ -260,6 +265,7 @@ export function TabBar<T extends string>({
 	onTabDragEnd,
 	onOverflowChange,
 	activateOnFileDragHover = false,
+	onTabContextMenu,
 }: TabBarProps<T>): JSX.Element {
 	const layoutId = useId();
 	// 拖拽中：dragKey 为被拖动的页签，order 为拖拽过程中的临时顺序（提交前不触碰 props）
@@ -609,6 +615,11 @@ export function TabBar<T extends string>({
 							data-tabkey={key}
 							data-file-drag-hover={fileDragHovered ? "" : undefined}
 							onPointerDown={(event) => onTabPointerDown(event, key)}
+							onContextMenu={(event) => {
+								if (!onTabContextMenu) return;
+								event.preventDefault();
+								onTabContextMenu(key, { x: event.clientX, y: event.clientY });
+							}}
 							onPointerMove={onTabPointerMove}
 							onPointerUp={(event) => finishPointerDrag(event.clientX, event.clientY, false)}
 							onPointerCancel={(event) => finishPointerDrag(event.clientX, event.clientY, true)}

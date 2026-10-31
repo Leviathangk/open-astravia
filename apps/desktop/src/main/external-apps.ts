@@ -149,7 +149,7 @@ async function listKnownApplications(): Promise<ExternalApplication[]> {
 	const resolved = await Promise.all(
 		candidates.map(async (candidate) => ({ candidate, path: await firstExisting(candidate.paths) })),
 	);
-	return resolved
+	const known = resolved
 		.filter((entry): entry is { candidate: KnownApplication; path: string } => entry.path !== null)
 		.map(({ candidate, path }) => ({
 			id: path,
@@ -158,6 +158,13 @@ async function listKnownApplications(): Promise<ExternalApplication[]> {
 			kind: candidate.kind,
 			isDefault: false,
 		}));
+	if (process.platform !== "win32") return known;
+	// 内置路径只能盖住默认安装位置：便携版、scoop/winget 布局、装在别的盘上的 VS Code
+	// 都会漏。App Paths 是 Windows 自己记的「这个 exe 在哪」，拿它兜底。
+	for (const app of await listWindowsAppPaths()) {
+		if (!known.some((candidate) => sameApplication(candidate, app))) known.push(app);
+	}
+	return known;
 }
 
 function knownCandidates(): KnownApplication[] {
@@ -391,50 +398,160 @@ function windowsCandidates(): KnownApplication[] {
 }
 
 /**
- * 通过 reg query 枚举 HKCR\Directory\shell 下的子键，每个子键通常对应一个
- * 「在此处打开」的应用。提取 command 默认值中的可执行文件路径作为 appId。
+ * Windows 自己记录「已安装、exec 在哪」的权威位置。App Paths 的子键名是 exe 文件名，
+ * (Default) 是完整路径，没有嵌套 command 子键，解析不会被显示名干扰。
+ *
+ * 64/32 位视图都要查：32 位安装器把项写进 Wow6432Node，用单一视图读就会漏掉。
  */
-async function listApplicationsWindows(_targetPath: string): Promise<ExternalApplication[]> {
-	try {
-		const { stdout } = await execFileAsync("reg", ["query", "HKCR\\Directory\\shell", "/s"], { timeout: 5000 });
+const WINDOWS_APP_PATHS_KEYS = [
+	"HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+	"HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+];
 
-		const apps: ExternalApplication[] = [];
-		const lines = stdout.split(/\r?\n/);
-		let currentName = "";
-		for (const line of lines) {
-			const subKeyMatch = line.match(/^HKEY_CLASSES_ROOT\\Directory\\shell\\([^\\]+)$/);
-			if (subKeyMatch) {
-				currentName = subKeyMatch[1];
-				continue;
-			}
-			if (currentName && /\\command$/i.test(line)) {
-				continue;
-			}
-			const defaultMatch = line.match(/^\s*\(Default\)\s+REG_SZ\s+(.+)$/i);
-			if (defaultMatch && currentName) {
-				const raw = defaultMatch[1].trim();
-				// 从命令字符串中提取第一个可执行文件路径（带引号或第一个 token）
-				const exeMatch = raw.match(/^"([^"]+\.exe)"|^([^\s]+\.exe)/i);
-				const exePath = exeMatch ? (exeMatch[1] ?? exeMatch[2]) : raw;
-				if (exePath && /\.exe$/i.test(exePath)) {
-					const displayName = prettifyWindowsAppName(currentName);
-					if (!apps.some((a) => a.applicationPath.toLowerCase() === exePath.toLowerCase())) {
-						apps.push({
-							id: exePath,
-							name: displayName,
-							applicationPath: exePath,
-							kind: inferApplicationKind(displayName),
-							isDefault: false,
-						});
-					}
+const WINDOWS_REGISTRY_VIEWS = ["/reg:64", "/reg:32"] as const;
+
+async function queryWindowsRegistry(args: readonly string[]): Promise<string | null> {
+	try {
+		const { stdout } = await execFileAsync("reg", [...args], { timeout: 5000 });
+		return stdout;
+	} catch {
+		// 项不存在、视图不可用、reg 被策略拦下——都当作「这个位置没查出东西」。
+		return null;
+	}
+}
+
+/** 展开注册表里可能出现的 `%ProgramFiles%` 一类变量，不然路径永远指向不存在的文件。 */
+export function expandWindowsEnv(value: string): string {
+	return value.replace(/%([^%]+)%/g, (match, name: string) => {
+		const resolved = process.env[name] ?? process.env[name.toUpperCase()];
+		return resolved ?? match;
+	});
+}
+
+/** 从 shell 命令里取出可执行文件：`"C:\\…\\Code.exe" "…\\cli.js" "%V"` → Code.exe 路径。 */
+export function windowsCommandExecutable(command: string): string | null {
+	const quoted = command.match(/^"([^"]+\.exe)"/i);
+	if (quoted) return quoted[1];
+	// 没加引号时路径可能带空格（`C:\Program Files\Foo\foo.exe %1`），
+	// 所以要一路取到第一个 .exe 为止，而不是取第一个空格前的 token。
+	const bare = command.match(/^(.+?\.exe)(?=\s|$)/i);
+	return bare ? bare[1] : null;
+}
+
+/**
+ * 解析 `reg query HKCR\Directory\shell /s` 的输出。
+ *
+ * 命令在子键 `\command` 的 (Default) 里，父键的 (Default) 只是菜单显示名；
+ * 早期实现把两者当同一种值处理，遇到先打印显示名的情形就再也读不到命令。
+ */
+export function parseWindowsShellVerbs(stdout: string): ExternalApplication[] {
+	const apps: ExternalApplication[] = [];
+	const seen = new Set<string>();
+	let currentName = "";
+	let insideCommand = false;
+
+	for (const line of stdout.split(/\r?\n/)) {
+		const keyMatch = line.match(/(?:^|\\)Directory\\shell\\([^\\]+)(\\command)?$/i);
+		if (keyMatch) {
+			currentName = keyMatch[1];
+			insideCommand = Boolean(keyMatch[2]);
+			continue;
+		}
+		if (!insideCommand || !currentName) continue;
+		const defaultMatch = line.match(/^\s*\(Default\)\s+REG_(?:EXPAND_)?SZ\s+(.+)$/i);
+		if (!defaultMatch) continue;
+		insideCommand = false;
+		const exePath = windowsCommandExecutable(expandWindowsEnv(defaultMatch[1].trim()));
+		if (exePath === null) continue;
+		const pathKey = exePath.toLowerCase();
+		if (seen.has(pathKey)) continue;
+		seen.add(pathKey);
+		const displayName = prettifyWindowsAppName(currentName);
+		apps.push({
+			id: exePath,
+			name: displayName,
+			applicationPath: exePath,
+			kind: inferApplicationKind(displayName),
+			isDefault: false,
+		});
+	}
+
+	return apps;
+}
+
+async function listApplicationsWindows(_targetPath: string): Promise<ExternalApplication[]> {
+	const stdout = await queryWindowsRegistry(["query", "HKCR\\Directory\\shell", "/s"]);
+	return stdout === null ? [] : parseWindowsShellVerbs(stdout);
+}
+
+/**
+ * 枚举 App Paths 里登记的应用，只留下真实存在的 exe——注册表里会残留卸载后的条目。
+ * 名字优先用已知 exe 的友好名，否则退回文件名，避免菜单里出现 `code.exe`。
+ */
+async function listWindowsAppPaths(): Promise<ExternalApplication[]> {
+	const paths = new Map<string, string>();
+	for (const key of WINDOWS_APP_PATHS_KEYS) {
+		for (const view of WINDOWS_REGISTRY_VIEWS) {
+			const stdout = await queryWindowsRegistry(["query", key, "/s", view]);
+			if (stdout === null) continue;
+			let currentExe = "";
+			for (const line of stdout.split(/\r?\n/)) {
+				const keyMatch = line.match(/App Paths\\([^\\]+)$/i);
+				if (keyMatch) {
+					currentExe = keyMatch[1];
+					continue;
 				}
-				currentName = "";
+				if (!currentExe) continue;
+				const defaultMatch = line.match(/^\s*\(Default\)\s+REG_(?:EXPAND_)?SZ\s+(.+)$/i);
+				if (!defaultMatch) continue;
+				currentExe = "";
+				const exePath = expandWindowsEnv(defaultMatch[1].trim());
+				if (!/\.exe$/i.test(exePath)) continue;
+				paths.set(exePath.toLowerCase(), exePath);
 			}
 		}
-		return apps;
-	} catch {
-		return [];
 	}
+
+	const apps: ExternalApplication[] = [];
+	for (const exePath of paths.values()) {
+		if (!(await pathExists(exePath))) continue;
+		const name = windowsApplicationName(exePath);
+		apps.push({
+			id: exePath,
+			name,
+			applicationPath: exePath,
+			kind: inferApplicationKind(name),
+			isDefault: false,
+		});
+	}
+	return apps;
+}
+
+/** exe 文件名 → 菜单里的显示名。认不出来的保留文件名，不要凭空编一个。 */
+const WINDOWS_EXE_NAMES: Record<string, string> = {
+	"code.exe": "Visual Studio Code",
+	"code - insiders.exe": "Visual Studio Code Insiders",
+	"cursor.exe": "Cursor",
+	"trae.exe": "Trae",
+	"trae cn.exe": "Trae CN",
+	"windsurf.exe": "Windsurf",
+	"zed.exe": "Zed",
+	"sublime_text.exe": "Sublime Text",
+	"qoder.exe": "Qoder IDE",
+	"idea64.exe": "IntelliJ IDEA",
+	"webstorm64.exe": "WebStorm",
+	"pycharm64.exe": "PyCharm",
+	"goland64.exe": "GoLand",
+	"wt.exe": "Windows Terminal",
+	"powershell.exe": "PowerShell",
+	"pwsh.exe": "PowerShell",
+	"cmd.exe": "Command Prompt",
+	"bash.exe": "Git Bash",
+};
+
+export function windowsApplicationName(exePath: string): string {
+	const file = exePath.split(/[\\/]/).pop() ?? exePath;
+	return WINDOWS_EXE_NAMES[file.toLowerCase()] ?? file.replace(/\.exe$/i, "");
 }
 
 function prettifyWindowsAppName(registryKey: string): string {

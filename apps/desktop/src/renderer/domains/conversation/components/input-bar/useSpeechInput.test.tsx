@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
 	captureStop: vi.fn(),
 }));
 
-vi.mock("@shared/lib/platform", () => ({ isWindows: true }));
+vi.mock("@shared/lib/platform", () => ({ isSpeechInputPlatform: true }));
 vi.mock("@/shared/feature-flags", () => ({
 	isSpeechInputBuildEnabled: () => mocks.speechInputBuildEnabled,
 }));

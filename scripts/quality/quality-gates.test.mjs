@@ -373,6 +373,35 @@ describe("affected package selection", () => {
 		expect(plan.targets).toEqual([]);
 	});
 
+	it("maps dynamically selected platform packages to the tests pinning their platform table", () => {
+		const plan = createChangedTestPlan(
+			["bun.lock"],
+			[{ key: "desktop", dependencies: ["sherpa-onnx-darwin-arm64", "sherpa-onnx-darwin-x64"] }],
+			() => true,
+		);
+
+		expect(plan.selectionErrors).toEqual([]);
+		expect(plan.targets).toMatchObject([
+			{
+				key: "desktop",
+				directTests: ["scripts/packaged-native-dependencies.test.mjs", "src/main/speech-input/platforms.test.ts"],
+			},
+		]);
+	});
+
+	it("still reports dependencies whose only test mapping points at a missing file", () => {
+		const plan = createChangedTestPlan(
+			["bun.lock"],
+			[{ key: "desktop", dependencies: ["sherpa-onnx-darwin-arm64"] }],
+			(file) => file !== "apps/desktop/src/main/speech-input/platforms.test.ts",
+		);
+
+		expect(plan.selectionErrors).toEqual([
+			"bun.lock changed desktop dependencies sherpa-onnx-darwin-arm64 are mapped to missing files src/main/speech-input/platforms.test.ts",
+		]);
+		expect(plan.targets).toEqual([]);
+	});
+
 	it("finds only workspaces whose resolved lockfile dependency closure changed", () => {
 		const before = `{
 			"lockfileVersion": 1,

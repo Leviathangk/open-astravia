@@ -2,7 +2,7 @@
 
 import { activityPanelOpenAtom, planModeStateBySessionAtom, todoItemsBySessionAtom } from "@shared/store/atoms";
 import { createActivityWorkspace } from "@shared/workspace/activity-workspace";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { createStore, Provider } from "jotai";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -92,5 +92,34 @@ describe("activity panel tabs driven by live session state", () => {
 			</Provider>,
 		);
 		expect(await screen.findByText("activityPanel.tabs.ports")).toBeTruthy();
+	});
+
+	// 用户路径：活页签上栏后右键页签 →「关闭其他」，不可关闭的文件页签必须留着。
+	// 栏上真正渲染的页签在 jsdom 里受宽度测量限制，这里以文件页签为右键目标，
+	// 「其他」就是 plan 与 todo，断言它们从文档（含测量层）里消失。
+	it("closes the other tabs from the tab context menu and keeps the fixed file tab", () => {
+		const store = createStore();
+		store.set(activityPanelOpenAtom, true);
+		store.set(todoItemsBySessionAtom, new Map([["runtime-1", [{ id: 1, content: "Ship", status: "pending" }]]]));
+		store.set(planModeStateBySessionAtom, {
+			"runtime-1": { permissionMode: "default", plan: { content: "1. Ship", status: "approved", updatedAt: "t" } },
+		});
+		render(
+			<Provider store={store}>
+				<ActivityPanel workspace={workspace} pluginScenario="project" />
+			</Provider>,
+		);
+		expect(screen.queryByText("activityPanel.tabs.plan")).not.toBeNull();
+		expect(screen.queryByText("activityPanel.tabs.todo")).not.toBeNull();
+
+		const fileTab = Array.from(document.querySelectorAll('[data-tabkey="file"]')).find((node) =>
+			node.querySelector('[role="tab"]'),
+		);
+		fireEvent.contextMenu(fileTab as HTMLElement);
+		fireEvent.click(screen.getByRole("menuitem", { name: "tabPicker.closeOthers" }));
+
+		expect(screen.queryByText("activityPanel.tabs.plan")).toBeNull();
+		expect(screen.queryByText("activityPanel.tabs.todo")).toBeNull();
+		expect(screen.queryAllByText("activityPanel.tabs.file").length).toBeGreaterThan(0);
 	});
 });

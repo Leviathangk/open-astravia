@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { availableParallelism } from "node:os";
 import type { SpeechModelPaths } from "./model-catalog.js";
+import { resolveSherpaNativeModule } from "./platforms.js";
 
 type NativeHandle = object;
 
@@ -25,8 +26,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function loadNativeAddon(): SherpaNativeAddon {
-	const candidate: unknown = createRequire(import.meta.url)("sherpa-onnx-win-x64");
-	if (!isRecord(candidate)) throw new Error("Invalid sherpa-onnx native module");
+	// 包名按平台派生：win32-x64 / darwin-arm64 / darwin-x64 各自一个原生包；
+	// 不支持的目标在这里直接报错，而不是去 require 一个不存在的模块。
+	const moduleName = resolveSherpaNativeModule(process.platform, process.arch);
+	const candidate: unknown = createRequire(import.meta.url)(moduleName);
+	if (!isRecord(candidate)) throw new Error(`Invalid sherpa-onnx native module: ${moduleName}`);
 	const requiredFunctions = [
 		"createOnlineRecognizer",
 		"createOnlineStream",

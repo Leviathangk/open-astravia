@@ -1,7 +1,8 @@
 import { stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { SpeechInputStatus } from "../../preload/api-types/speech-input.js";
-import { type SpeechModelDefinition, WINDOWS_ZIPFORMER_MODEL } from "./model-catalog.js";
+import { BUNDLED_ZIPFORMER_MODEL, type SpeechModelDefinition } from "./model-catalog.js";
+import { isSpeechInputPlatformSupported } from "./platforms.js";
 
 export interface SpeechModelManagerOptions {
 	platform?: NodeJS.Platform;
@@ -29,11 +30,11 @@ export class SpeechModelManager {
 		this.arch = options.arch ?? process.arch;
 		this.enabled = options.enabled ?? true;
 		this.modelRoot = options.modelRoot;
-		this.model = options.model ?? WINDOWS_ZIPFORMER_MODEL;
+		this.model = options.model ?? BUNDLED_ZIPFORMER_MODEL;
 	}
 
 	get supported(): boolean {
-		return this.enabled && this.platform === "win32" && this.arch === "x64";
+		return this.enabled && isSpeechInputPlatformSupported(this.platform, this.arch);
 	}
 
 	get modelDirectory(): string {

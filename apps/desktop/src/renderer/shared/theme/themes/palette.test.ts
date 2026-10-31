@@ -64,13 +64,24 @@ describe.each(THEMES)("$id 主题色板", (theme) => {
 			expect(ladders[index], `${steps[index - 1]} → ${steps[index]} 没有更亮`).toBeGreaterThan(ladders[index - 1]);
 		}
 		// 深色主题的主要抱怨是“太暗、没有光感”：画布亮度卡在 0.003 附近时，卡面、浮层、
-		// 边框再准也读不出层次。这里给画布定一个下限（不许压到纯黑）和上限（不许灰成
-		// 浅色主题），并把相邻两层的色距抬到 8——低于这个值时投影/边框仍是唯一分隔。
-		expect(luminance(theme.dark.background), "深色画布被压得太黑").toBeGreaterThanOrEqual(0.0075);
+		// 边框再准也读不出层次；压到 0.008 也只能算“没那么黑”。侧栏这种大面积区域仍然
+		// 是一块黑，所以下限抬到 0.011——深色画布要能看出它是什么颜色，而不是“比黑亮一点”。
+		// 上限 0.02 防止灰成浅色主题；相邻两层的色距抬到 8，低于这个值时投影/边框
+		// 仍是唯一分隔。
+		expect(luminance(theme.dark.background), "深色画布被压得太黑").toBeGreaterThanOrEqual(0.011);
 		expect(luminance(theme.dark.background), "深色画布提得太亮").toBeLessThanOrEqual(0.02);
 		for (let index = 1; index < steps.length; index += 1) {
 			expect(distance(steps[index - 1], steps[index])).toBeGreaterThanOrEqual(8);
 		}
+		// 浮层与卡面是两层同时可见的表面（弹窗盖在卡片上），差得太少就只剩投影在分隔。
+		expect(distance(theme.dark.card, theme.dark.popover), "浮层与卡面分不开").toBeGreaterThanOrEqual(6);
+	});
+
+	it("深色的边框与输入框在画布上看得见", () => {
+		// 边框曾经比画布只亮一档（对比度 1.6），列表行、分栏和输入框的边界全变成
+		// “靠感觉找”——深色下这种弱边界比配色本身更让人觉得版面糊。
+		expect(contrast(theme.dark.border, theme.dark.background), "深色边框融进画布").toBeGreaterThanOrEqual(2.2);
+		expect(contrast(theme.dark.input, theme.dark.background), "深色输入框融进画布").toBeGreaterThanOrEqual(2.5);
 	});
 
 	it("浅色与深色的表面不是同一层阶梯", () => {

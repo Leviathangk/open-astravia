@@ -8,11 +8,13 @@ import { defaultTheme } from "./default";
 // 主色比原色板压暗一档（#b04a2c）：它要当实心按钮底色，浅橙上压白字读不清。
 // 深色表面往赭红偏：与蜜蜂（蜜金）刻意分色相，且与森林、薄荷的冷调完全不重叠。
 //
-// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.0075–0.02，
-// 深色相邻表面 RGB 距离 ≥8；浅色四层表面彼此 ≥12。
+// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.011–0.02，
+// 深色相邻表面 RGB 距离 ≥8，且边框对画布的对比度要够看（≥2.2）；浅色四层表面彼此 ≥12。
 // 深色原先压到过 0.0049——黑到没有光感，侧栏、卡面、画布糊成一片，看不出层次；
 // 浅色原先只靠“卡面比画布亮一点点”做层次，四层都落在同一档米白里，读上去像一块布。
-// 所以深色抬亮画布（现 0.0083），浅色改成向下逐级压暗拉开层差。
+// 所以浅色改成向下逐级压暗拉开层差。深色是这套主题最长的痛：赭红在低亮度下会
+// 直接读成“脏煤球”，既暖又不柔——现在把画布抬到 0.0120 并把饱和度降到 20%，
+// 表面改成暮色暖纸，暖色还在，但不发黑。
 
 const PRIMARY_LIGHT = "#b04a2c";
 const PRIMARY_DARK = "#e08a68";
@@ -29,15 +31,15 @@ const LIGHT_BORDER = "#d3bfa4";
 const LIGHT_INPUT = "#dfcbb1";
 const LIGHT_MUTED_FG = "#5f4d3f";
 
-const DARK_BG = "#1f1411";
+const DARK_BG = "#251a18";
 const DARK_FG = "#f2eae0";
-const DARK_CARD = "#2f2015";
-const DARK_POPOVER = "#37251b";
-const DARK_MUTED = "#271a12";
-const DARK_SECONDARY = "#3a291c";
-const DARK_ACCENT = "#402e21";
-const DARK_BORDER = "#503726";
-const DARK_INPUT = "#5b412f";
+const DARK_CARD = "#362624";
+const DARK_POPOVER = "#3c2b28";
+const DARK_MUTED = "#2c1f1e";
+const DARK_SECONDARY = "#402d2a";
+const DARK_ACCENT = "#46322f";
+const DARK_BORDER = "#75534e";
+const DARK_INPUT = "#845e58";
 const DARK_MUTED_FG = "#ab9c8e";
 
 export const parchmentTheme: ThemeDef = {

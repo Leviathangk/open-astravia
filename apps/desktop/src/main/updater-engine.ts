@@ -39,12 +39,28 @@ export interface UpdateEngine {
  * 把控制权交给安装器前后各需要一次介入，缺任何一个这条链路都会静默失败，
  * 三种失败模式见 quitAndInstall 的注释与 mac-installer-handoff.ts。
  */
+/**
+ * 把控制权交给安装器前后各需要一次介入，缺任何一个这条链路都会静默失败，
+ * 三种失败模式见 quitAndInstall 的注释与 mac-installer-handoff.ts。
+ */
 export interface UpdateEngineQuitHooks {
 	/** 交棒前：标记应用正在退出，并跑完退出清理。 */
 	prepare?: () => Promise<void> | void;
-	/** 交棒后：等安装器接手，再真正结束本进程。 */
-	finalize?: () => Promise<void>;
+	/**
+	 * 交棒后：等安装器接手。返回值决定进程还归不归引擎管：
+	 * `"started"` 安装器已接手，引擎硬退出；`"exiting"` 交接方自己负责退出
+	 * （Windows 必须走正常 quit 流程 relauncher 才会 spawn）；`"unavailable"`
+	 * 安装器根本没接手，引擎改走内置安装器，绝不能让进程悄悄消失。
+	 */
+	handOff?: (mode: UpdateInstallMode) => Promise<UpdateHandoffResult>;
+	/** 兜底硬退出，所有平台都挂在 app.exit 上。 */
+	exit?: (code: number) => void;
 }
+
+/** 本次真正执行的安装通道，交棒方据此决定怎么退出、要不要等 ShipIt。 */
+export type UpdateInstallMode = "electron-updater" | "mac-squirrel" | "mac-built-in" | "windows-inno";
+
+export type UpdateHandoffResult = "started" | "exiting" | "unavailable";
 
 export interface NativeMacUpdateEvents {
 	onUpdateDownloaded(listener: () => void): () => void;
@@ -75,6 +91,11 @@ export interface MacUnsignedInstallOptions {
 	appPath: string;
 	/** 安装脚本与日志的落脚点。 */
 	cacheRoot: string;
+	/**
+	 * 探针判定为未签名：直接走内置安装器，不必先等一趟 Squirrel。
+	 * 判定为 false 不代表安全——交棒失败时仍会回退到内置安装器。
+	 */
+	preferBuiltIn?: boolean;
 	/** 仅测试：记录调用而不真的启动脚本。 */
 	launch?: typeof launchMacUnsignedInstaller;
 }
@@ -162,21 +183,26 @@ function waitForNativeMacUpdate(events: NativeMacUpdateEvents): { promise: Promi
 
 export class ElectronUpdaterEngine implements UpdateEngine {
 	private useInnoUpdate = false;
-	/** 未签名通道待安装的 ZIP；拿到它说明下载与校验都已完成。 */
+	/** 未签名/已交棒失败时待安装的 ZIP；拿到它说明下载与校验都已完成。 */
 	private macPendingArchive: string | undefined;
 	/** 本次检查到的资产名，用于在 pending 目录里找回 ZIP。 */
 	private macAssetFileName: string | undefined;
+
+	/** 探针判定为未签名：优先走内置安装器，不等 Squirrel。 */
+	private get preferBuiltInInstall(): boolean {
+		return this.macInstallTarget?.preferBuiltIn === true;
+	}
 
 	constructor(
 		private readonly updater: AppUpdater,
 		private readonly innoWindowsUpdate?: InnoWindowsUpdateController,
 		private readonly nativeMacUpdateEvents?: NativeMacUpdateEvents,
 		private readonly quitHooks: UpdateEngineQuitHooks = {},
-		private readonly macUnsignedInstall?: MacUnsignedInstallOptions,
+		private readonly macInstallTarget?: MacUnsignedInstallOptions,
 	) {
 		this.updater.autoDownload = false;
-		// 未签名包自己换包：退出时再让 Squirrel 试一次只会重现验签失败。
-		this.updater.autoInstallOnAppQuit = !innoWindowsUpdate && !this.macUnsignedInstall;
+		// 已判定为未签名的包自己换包：退出时再让 Squirrel 试一次只会重现验签失败。
+		this.updater.autoInstallOnAppQuit = !innoWindowsUpdate && !this.preferBuiltInInstall;
 		this.updater.allowDowngrade = false;
 		this.updater.disableWebInstaller = true;
 		this.updater.logger = {
@@ -231,7 +257,7 @@ export class ElectronUpdaterEngine implements UpdateEngine {
 		this.updater.on("download-progress", listener);
 		// 未签名包不等 Squirrel：它的签名校验必然失败，等下去只会把下载成功判成失败。
 		const nativeMacReadiness =
-			this.nativeMacUpdateEvents && !this.macUnsignedInstall
+			this.nativeMacUpdateEvents && !this.preferBuiltInInstall
 				? waitForNativeMacUpdate(this.nativeMacUpdateEvents)
 				: undefined;
 		if (nativeMacReadiness) {
@@ -260,7 +286,7 @@ export class ElectronUpdaterEngine implements UpdateEngine {
 				// 和只发一个 error 事件、Promise 照常 resolve。只处理前者时，ZIP 始终没被认领，
 				// quitAndInstall() 就会退回 Squirrel 那条对未签名包必然失败的路：
 				// 进度停在 100%、进程退出、用户重开还是旧版本，且全程没有任何报错。
-				if (this.macUnsignedInstall) this.macPendingArchive ??= await this.findPendingArchive();
+				if (this.preferBuiltInInstall) this.macPendingArchive ??= await this.findPendingArchive();
 				if (!this.useInnoUpdate || !this.innoWindowsUpdate) return downloadedPaths;
 				const installerPath = downloadedPaths[0];
 				if (!installerPath) throw new Error("electron-updater did not return a Windows installer");
@@ -279,7 +305,7 @@ export class ElectronUpdaterEngine implements UpdateEngine {
 			.catch(async (error: unknown) => {
 				// 未签名包：ZIP 已经下载并通过哈希校验，是 Squirrel 之后的验签失败。
 				// 这种情况下把缓存里的 ZIP 当成「已就绪」，由 quitAndInstall 自己解包替换。
-				if (!this.macUnsignedInstall) throw error;
+				if (!this.preferBuiltInInstall) throw error;
 				const archive = await this.findPendingArchive();
 				if (!archive) throw error;
 				this.macPendingArchive = archive;
@@ -304,31 +330,43 @@ export class ElectronUpdaterEngine implements UpdateEngine {
 	}
 
 	/**
-	 * 在 electron-updater 的 pending 目录里找回刚下载的 ZIP。名字取自更新清单里的资产名，
+	 * 在 electron-updater 的缓存里找回已下载的 ZIP。名字取自更新清单里的资产名，
 	 * 也是 `executeDownload` 落盘用的名字。
+	 *
+	 * 顺序上先认精确名字，再退到「最新的 ZIP」，最后才看缓存根：清单里的
+	 * `files[0]` 可能是另一个架构，而差量下载会把 `update.zip` 放在 pending 之外。
+	 * 找不到就等于没有可替换的包，调用方必须报错而不是退回 Squirrel。
 	 */
 	private async findPendingArchive(): Promise<string | undefined> {
 		const helper = (this.updater as unknown as UpdateProviderAccess).downloadedUpdateHelper;
 		if (!helper) return undefined;
 		const pendingDir = helper.cacheDirForPendingUpdate;
-		const fileName = this.macAssetFileName;
-		if (fileName) {
-			const candidate = join(pendingDir, fileName);
+		const exact = this.macAssetFileName ? join(pendingDir, this.macAssetFileName) : undefined;
+		if (exact) {
 			try {
-				await stat(candidate);
-				return candidate;
+				await stat(exact);
+				return exact;
 			} catch {
 				// 清单里可能同时有 x64 与 arm64 两个 ZIP，files[0] 未必是本机下载的那个。
 			}
 		}
-		// 退到「pending 目录里最新的 ZIP」：只可能是刚才这次下载的产物。
+		const directories = [pendingDir, helper.cacheDir];
+		for (const directory of directories) {
+			const newest = await this.newestArchiveIn(directory);
+			if (newest) return newest;
+		}
+		return undefined;
+	}
+
+	/** 目录里最新的 `.zip`：只可能是刚才这次下载的产物。 */
+	private async newestArchiveIn(directory: string): Promise<string | undefined> {
 		try {
-			const entries = await readdir(pendingDir, { withFileTypes: true });
+			const entries = await readdir(directory, { withFileTypes: true });
 			const candidates = await Promise.all(
 				entries
 					.filter((entry) => entry.isFile() && entry.name.endsWith(".zip"))
 					.map(async (entry) => {
-						const path = join(pendingDir, entry.name);
+						const path = join(directory, entry.name);
 						const info = await stat(path);
 						return { path, mtimeMs: info.mtimeMs };
 					}),
@@ -348,9 +386,10 @@ export class ElectronUpdaterEngine implements UpdateEngine {
 		// 为了兼容先 quitAndInstall 后下载的旧调用顺序。
 		// 这个检查必须排在 prepare 之前：prepare 会标记 isQuitting、写重启标记并跑完
 		// 退出清理，报错如果落在它后面，应用就停在「清理已做、窗口已关、却还活着」的状态。
-		const macInstaller = this.macUnsignedInstall;
+		const macInstaller = this.macInstallTarget;
+		const preferBuiltIn = this.preferBuiltInInstall;
 		let macArchive: string | undefined;
-		if (macInstaller) {
+		if (macInstaller && preferBuiltIn) {
 			this.macPendingArchive ??= await this.findPendingArchive();
 			macArchive = this.macPendingArchive;
 			if (!macArchive) throw new Error("unsigned macOS update has no staged archive to install");
@@ -359,25 +398,52 @@ export class ElectronUpdaterEngine implements UpdateEngine {
 		// 改成隐藏，而 Squirrel.Mac 走 NSApp terminate 语义，任一窗口 preventDefault
 		// 就取消整个终止流程——症状是「点了重启但应用没退」。
 		await this.quitHooks.prepare?.();
-		if (macInstaller && macArchive) {
+
+		let mode: UpdateInstallMode = process.platform === "darwin" ? "mac-squirrel" : "electron-updater";
+		if (macInstaller && preferBuiltIn && macArchive) {
 			// 未签名包：Squirrel 装不了，改由脱离进程的脚本等本进程退出后换包。
-			const launch = macInstaller.launch ?? launchMacUnsignedInstaller;
-			const scriptPath = await launch({
-				appPath: macInstaller.appPath,
-				archivePath: macArchive,
-				cacheRoot: macInstaller.cacheRoot,
-				scriptName: this.macAssetFileName?.replace(/\.zip$/u, "") ?? "update",
-			});
-			console.info("[updater] built-in installer script is running:", scriptPath);
+			await this.launchBuiltInInstaller(macInstaller, macArchive);
+			mode = "mac-built-in";
 		} else if (this.useInnoUpdate && this.innoWindowsUpdate) {
 			await this.innoWindowsUpdate.activate();
+			mode = "windows-inno";
 		} else {
 			this.updater.quitAndInstall(true, true);
 		}
+
 		// 交棒后：等安装器接手再结束进程。既不能立刻硬 exit（Squirrel 还没提交
 		// launchd 作业），也不能不 exit（本进程挂着 sidecar 等句柄不会自行退出，而
 		// launchd 要等目标进程退出才 spawn ShipIt）。两种都实测失败过，
 		// 详见 mac-installer-handoff.ts。
-		await this.quitHooks.finalize?.();
+		const verdict = (await this.quitHooks.handOff?.(mode)) ?? "started";
+		if (verdict === "exiting") return;
+		if (verdict === "unavailable") {
+			// ShipIt 作业没提交上去（实测会走到 job-missing）：此时安装器根本没接手，
+			// 硬退出只会让用户「重开还是旧版本」且全程无报错。手里有已校验的 ZIP 就
+			// 自己换包，没有就抛出去让 UI 报错——绝不静默退出。
+			if (!macInstaller) {
+				throw new Error("macOS installer did not take over and no built-in installer is available");
+			}
+			// 探针可能漏判（实测就漏过）：这里不信任它，直接找已校验的 ZIP 自己换包。
+			const fallbackArchive = macArchive ?? (await this.findPendingArchive());
+			if (!fallbackArchive) {
+				throw new Error("macOS installer did not take over and no staged archive is available");
+			}
+			console.warn("[updater] Squirrel.Mac handoff failed, falling back to the built-in installer");
+			await this.launchBuiltInInstaller(macInstaller, fallbackArchive);
+			await this.quitHooks.handOff?.("mac-built-in");
+		}
+		this.quitHooks.exit?.(0);
+	}
+
+	private async launchBuiltInInstaller(installer: MacUnsignedInstallOptions, archivePath: string): Promise<void> {
+		const launch = installer.launch ?? launchMacUnsignedInstaller;
+		const scriptPath = await launch({
+			appPath: installer.appPath,
+			archivePath,
+			cacheRoot: installer.cacheRoot,
+			scriptName: this.macAssetFileName?.replace(/\.zip$/u, "") ?? "update",
+		});
+		console.info("[updater] built-in installer script is running:", scriptPath);
 	}
 }

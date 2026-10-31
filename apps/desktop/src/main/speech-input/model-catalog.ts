@@ -30,7 +30,7 @@ function parseModelFileName(value: string): SpeechModelFileName {
 
 const files = speechModelManifest.files.map((file) => ({ ...file, name: parseModelFileName(file.name) }));
 
-export const WINDOWS_ZIPFORMER_MODEL: SpeechModelDefinition = {
+export const BUNDLED_ZIPFORMER_MODEL: SpeechModelDefinition = {
 	id: speechModelManifest.id,
 	sampleRate: speechModelManifest.sampleRate,
 	totalBytes: files.reduce((total, file) => total + file.size, 0),

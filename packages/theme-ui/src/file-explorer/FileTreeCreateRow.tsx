@@ -1,5 +1,6 @@
 import { cn } from "@astravia-org/ui/utils";
 import { useEffect, useRef, useState, type JSX } from "react";
+import { useImeCompositionGuard } from "../shared/useImeCompositionGuard";
 import { getFileIcon } from "./fileIcons";
 import type { FileExplorerEntryKind } from "./types";
 
@@ -24,6 +25,7 @@ export function FileTreeCreateRow({
 }: FileTreeCreateRowProps): JSX.Element {
 	const [value, setValue] = useState("");
 	const inputRef = useRef<HTMLInputElement>(null);
+	const ime = useImeCompositionGuard();
 	const isDirectory = kind === "directory";
 	const icon = getFileIcon(value, isDirectory, false);
 
@@ -76,6 +78,8 @@ export function FileTreeCreateRow({
 						submit();
 					}}
 					onKeyDown={(event) => {
+						// 回车在组合输入中用于上屏候选词，此时既不能提交也不能 preventDefault。
+						if (ime.shouldIgnoreKey(event)) return;
 						if (event.key === "Enter") {
 							event.preventDefault();
 							submit();
@@ -84,6 +88,8 @@ export function FileTreeCreateRow({
 							onCancel();
 						}
 					}}
+					onCompositionStart={ime.onCompositionStart}
+					onCompositionEnd={ime.onCompositionEnd}
 					className={cn(
 						"min-w-0 flex-1 rounded border bg-background px-1 py-0 text-[12px] text-foreground outline-none",
 						error ? "border-destructive" : "border-primary",

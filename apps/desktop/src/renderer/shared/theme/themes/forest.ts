@@ -11,11 +11,12 @@ import { defaultTheme } from "./default";
 // 色相往**橄榄**偏、而不是往青绿偏：森林与薄荷同属绿色系，若两者都往青绿走，
 // 深色下两条侧栏只差 RGB 距离 5.8，用户会直接读成同一套主题。
 //
-// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.0075–0.02，
-// 深色相邻表面 RGB 距离 ≥8；浅色四层表面彼此 ≥12。
+// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.011–0.02，
+// 深色相邻表面 RGB 距离 ≥8，且边框对画布的对比度要够看（≥2.2）；浅色四层表面彼此 ≥12。
 // 深色原先压到过 0.0056——黑到没有光感，侧栏、卡面、画布糊成一片，看不出层次；
 // 浅色原先只靠“卡面比画布亮一点点”做层次，四层都落在同一档米白里，读上去像一块布。
-// 所以深色抬亮画布（现 0.0088），浅色改成向下逐级压暗拉开层差。
+// 所以浅色改成向下逐级压暗拉开层差；深色从 0.0088 再抬到 0.0146——只在最深处加一点
+// 亮度不够，侧栏这种大面积区域仍然是黑的，要连同卡面、浮层一起抬，层差才读得出来。
 
 const PRIMARY_LIGHT = "#2d5a3d";
 const PRIMARY_DARK = "#4ea36a";
@@ -32,15 +33,15 @@ const LIGHT_BORDER = "#b9c9a6";
 const LIGHT_INPUT = "#c8d8b4";
 const LIGHT_MUTED_FG = "#42513a";
 
-const DARK_BG = "#101a0d";
+const DARK_BG = "#192313";
 const DARK_FG = "#dde5d4";
-const DARK_CARD = "#1d2a15";
-const DARK_POPOVER = "#22301a";
-const DARK_MUTED = "#16220f";
-const DARK_SECONDARY = "#26361b";
-const DARK_ACCENT = "#2c3f20";
-const DARK_BORDER = "#3c5530";
-const DARK_INPUT = "#44613a";
+const DARK_CARD = "#26341c";
+const DARK_POPOVER = "#2a3b20";
+const DARK_MUTED = "#1f2a17";
+const DARK_SECONDARY = "#2d3e21";
+const DARK_ACCENT = "#324525";
+const DARK_BORDER = "#496637";
+const DARK_INPUT = "#53733e";
 const DARK_MUTED_FG = "#9aa793";
 
 export const forestTheme: ThemeDef = {

@@ -138,7 +138,7 @@ ASTRAVIA_UPDATE_URL=https://releases.astravia.dev/desktop/test
 
 | 变量 | 说明 |
 | --- | --- |
-| `ASTRAVIA_SPEECH_INPUT_ENABLED` | `false` 时不打包语音模型、Sherpa 原生运行时与语音入口。缺省开启 |
+| `ASTRAVIA_SPEECH_INPUT_ENABLED` | `false` 时不打包语音模型、Sherpa 原生运行时与语音入口。缺省开启；只在 `win32-x64`、`darwin-arm64`、`darwin-x64` 目标上生效，见 [ADR-0070](../adr/0070-windows-local-streaming-speech-input.md) |
 | `ASTRAVIA_TENANT` | 系统插件租户，决定打包哪些 preset 插件。取值见 `packages/plugins/tenants.json` |
 | `ASTRAVIA_BUILD_ENV` | 指定加载哪个 `.env.<mode>` |
 

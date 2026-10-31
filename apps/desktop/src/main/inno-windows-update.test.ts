@@ -100,6 +100,7 @@ describe("InnoWindowsUpdateController", () => {
 			version: "1.2.3",
 			previousVersion: "1.2.2",
 			pending: true,
+			attempts: 0,
 		});
 
 		const healthyController = new InnoWindowsUpdateController({
@@ -113,6 +114,7 @@ describe("InnoWindowsUpdateController", () => {
 			version: "1.2.3",
 			previousVersion: "1.2.2",
 			pending: false,
+			attempts: 0,
 		});
 		expect(installInstaller).toHaveBeenCalledWith(
 			installerPath,

@@ -75,6 +75,42 @@ describe("FileTreeCreateRow", () => {
 		expect(onSubmit).not.toHaveBeenCalled();
 		expect(onCancel).toHaveBeenCalled();
 	});
+
+	it("组合输入的回车只负责上屏候选词，不提前提交", () => {
+		vi.useFakeTimers();
+		try {
+			const { onCancel, onSubmit } = createRow();
+			const input = screen.getByRole("textbox");
+
+			fireEvent.compositionStart(input);
+			fireEvent.change(input, { target: { value: "zhong" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(onSubmit).not.toHaveBeenCalled();
+
+			// compositionend 与紧随其后的那次 keydown 顺序在各引擎不一致，仍不能当作提交。
+			fireEvent.compositionEnd(input);
+			fireEvent.change(input, { target: { value: "中文笔记.md" } });
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(onSubmit).not.toHaveBeenCalled();
+			expect(onCancel).not.toHaveBeenCalled();
+
+			vi.advanceTimersByTime(120);
+			fireEvent.keyDown(input, { key: "Enter" });
+			expect(onSubmit).toHaveBeenCalledWith("中文笔记.md");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("浏览器已标记 isComposing 的回车也不提交", () => {
+		const { onSubmit } = createRow();
+		const input = screen.getByRole("textbox");
+
+		fireEvent.change(input, { target: { value: "拼音" } });
+		fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+
+		expect(onSubmit).not.toHaveBeenCalled();
+	});
 });
 
 const entry = { name: "main.ts", path: "/ws/src/main.ts", isDirectory: false, size: 12, modifiedAt: 0 };
@@ -125,5 +161,38 @@ describe("FileTreeNodeView rename", () => {
 
 		expect(onRenameSubmit).not.toHaveBeenCalled();
 		expect(onRenameCancel).toHaveBeenCalled();
+	});
+
+	it("中文重命名的回车只上屏候选词，不会被当成提交", () => {
+		vi.useFakeTimers();
+		try {
+			const { onRenameCancel, onRenameSubmit } = renameRow();
+			const input = screen.getByRole("textbox");
+
+			fireEvent.compositionStart(input);
+			fireEvent.keyDown(input, { key: "Enter" });
+			fireEvent.compositionEnd(input);
+			fireEvent.keyDown(input, { key: "Enter" });
+
+			expect(onRenameSubmit).not.toHaveBeenCalled();
+			expect(onRenameCancel).not.toHaveBeenCalled();
+
+			vi.advanceTimersByTime(120);
+			fireEvent.keyDown(input, { key: "Enter" });
+
+			expect(onRenameSubmit).toHaveBeenCalledWith("/ws/src/main.ts", "app.ts");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("组合输入中的 Escape 留给输入法取消候选，不放弃重命名", () => {
+		const { onRenameCancel } = renameRow();
+		const input = screen.getByRole("textbox");
+
+		fireEvent.compositionStart(input);
+		fireEvent.keyDown(input, { key: "Escape" });
+
+		expect(onRenameCancel).not.toHaveBeenCalled();
 	});
 });

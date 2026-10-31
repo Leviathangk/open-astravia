@@ -177,10 +177,11 @@ function resolveSandboxResourceFilters() {
 // 无平台二进制差异，可安全跨平台打包。
 //
 // uiohook-napi（快捷面板双击功能键全局监听）、electron-liquid-glass（macOS
-// 液态/磨砂玻璃）与 sherpa-onnx-win-x64（Windows 语音输入）同为被 external 的运行时原生模块，必须复制进 staging，
+// 液态/磨砂玻璃）与 sherpa-onnx-*（语音输入）同为被 external 的运行时原生模块，必须复制进 staging，
 // 否则 packaged 环境 require 不到。uiohook 各平台都有 prebuild、需全平台带；
-// electron-liquid-glass 是 darwin-only，Sherpa 是 win32-x64-only；依赖策略按目标产物平台选择，
-// 不按构建主机选择，避免把另一个系统的原生包带入产物。
+// electron-liquid-glass 是 darwin-only，Sherpa 只在构建配置列出的目标平台带（win32-x64 /
+// darwin-arm64 / darwin-x64，见 src/main/speech-input/supported-platforms.json）；依赖策略按目标产物
+// 平台选择，不按构建主机选择，避免把另一个系统的原生包带入产物。
 const packagedNativeDependencies = resolvePackagedNativeDependencies(resolvePlatformFamilies(), {
 	speechInputEnabled: speechInputBuildConfig.enabled,
 });
@@ -241,6 +242,26 @@ function assertTerminalPtyBinaryStaged() {
 }
 
 assertTerminalPtyBinaryStaged();
+
+// 语音输入的原生运行时同理：只有本次目标对应的 `sherpa-onnx-*` 能让 createRequire 解析到。
+// 缺了它按钮会出现（构建期开关已打开），但一录音就报 `Cannot find module`，同样只在安
+// 装包里复现。包名取自 supported-platforms.json，不在这里拼字符串（Windows 的包名并不是
+// `sherpa-onnx-win32-x64`）。
+function assertSpeechInputNativeBinaryStaged() {
+	if (!speechInputBuildConfig.enabled) return;
+	const staged = new Set(externalDepInfos.map((info) => info.dep));
+	const missing = speechInputBuildConfig.nativeModules.filter(
+		(dep) => optionalExternalDeps.includes(dep) && !staged.has(dep),
+	);
+	if (missing.length > 0) {
+		throw new Error(
+			`[prepare-pack] speech input native runtime missing for this target: ${missing.join(", ")}. ` +
+				`Install it on the build host (it ships as an optionalDependency of @astravia/desktop).`,
+		);
+	}
+}
+
+assertSpeechInputNativeBinaryStaged();
 
 function assertPackagedMainHasNoWorkspaceImports(mainOutputDir) {
 	const workspaceImportPattern = /^\s*import(?:\s+.+\s+from)?\s+["']@astravia\//;
@@ -777,6 +798,10 @@ const builderConfig = {
 			NSLocalNetworkUsageDescription:
 				"Astravia 需要访问本地网络以连接你在局域网内运行的 AI 模型服务（如 Ollama、LM Studio、vLLM 等）。",
 			NSBonjourServices: ["_http._tcp", "_https._tcp"],
+			// 语音输入用麦克风做本地识别（音频不上传）。缺这条 macOS 会直接拒绝授权，
+			// 用户只看到录音按钮没反应。
+			NSMicrophoneUsageDescription:
+				"Astravia 需要使用麦克风，在本地把你说的内容转成文字。音频不会离开这台设备。",
 		},
 	},
 	// DMG 视觉与图标布局。详见 docs/adr/0003-dmg-repair-helper.md。

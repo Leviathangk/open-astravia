@@ -8,11 +8,12 @@ import { defaultTheme } from "./default";
 // 深色画布压到近黑的暖棕，卡面提亮。chart 取蜜黄同族色，深色下不刺眼。
 // 深色表面往蜜金偏：与羊皮纸（赭红）刻意分色相，两套暖色主题不会混在一起。
 //
-// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.0075–0.02，
-// 深色相邻表面 RGB 距离 ≥8；浅色四层表面彼此 ≥12。
+// 亮度被测试钉成不变量（palette.test.ts）：深色画布亮度必须落在 0.011–0.02，
+// 深色相邻表面 RGB 距离 ≥8，且边框对画布的对比度要够看（≥2.2）；浅色四层表面彼此 ≥12。
 // 深色原先压到过 0.0059——黑到没有光感，侧栏、卡面、画布糊成一片，看不出层次；
 // 浅色原先只靠“卡面比画布亮一点点”做层次，四层都落在同一档米白里，读上去像一块布。
-// 所以深色抬亮画布（现 0.0089），浅色改成向下逐级压暗拉开层差。
+// 浅色改成向下逐级压暗拉开层差；深色另抬到 0.0148——蜜色在低亮度下会往土黄掉，
+// 画布太暗时整套主题读作“褐色”，色相优势全丢了。
 
 const PRIMARY_LIGHT = "#14120c";
 const PRIMARY_DARK = "#e0c65c";
@@ -29,15 +30,15 @@ const LIGHT_BORDER = "#d5c48f";
 const LIGHT_INPUT = "#e5d5a2";
 const LIGHT_MUTED_FG = "#5b5240";
 
-const DARK_BG = "#1a1809";
+const DARK_BG = "#24210f";
 const DARK_FG = "#f0e9d6";
-const DARK_CARD = "#29250f";
-const DARK_POPOVER = "#302b12";
-const DARK_MUTED = "#211e0c";
-const DARK_SECONDARY = "#332e17";
-const DARK_ACCENT = "#3a3419";
-const DARK_BORDER = "#4b4222";
-const DARK_INPUT = "#554b28";
+const DARK_CARD = "#353116";
+const DARK_POPOVER = "#3b3719";
+const DARK_MUTED = "#2b2812";
+const DARK_SECONDARY = "#3e391b";
+const DARK_ACCENT = "#453f1d";
+const DARK_BORDER = "#675f2c";
+const DARK_INPUT = "#746c32";
 const DARK_MUTED_FG = "#a19678";
 
 export const beeTheme: ThemeDef = {

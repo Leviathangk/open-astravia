@@ -209,7 +209,12 @@
 		"hiddenPanels": "Hidden panels",
 		"availablePanels": "Add panels",
 		"hideTab": "Hide tab",
-		"menu": "Tab menu"
+		"menu": "Tab menu",
+		"closeTab": "Close tab",
+		"closeLeft": "Close tabs to the left",
+		"closeRight": "Close tabs to the right",
+		"closeOthers": "Close other tabs",
+		"closeAll": "Close all tabs"
 	},
 	"tour": {
 		"sidebar": {

@@ -1,5 +1,6 @@
 import { cn } from "@astravia-org/ui/utils";
 import { useEffect, useRef, useState, type JSX } from "react";
+import { useImeCompositionGuard } from "../shared/useImeCompositionGuard";
 import { FILE_TREE_NODE_DROP_CLASS, isDragLeavingElement } from "./drag-target";
 import { getFileIcon } from "./fileIcons";
 import { beginNativeFileDrag } from "./nativeFileDrag";
@@ -129,6 +130,7 @@ export function FileTreeNodeView({
 	const [localRenameValue, setLocalRenameValue] = useState(entry.name);
 	const renameValue = draftValue ?? localRenameValue;
 	const inputRef = useRef<HTMLInputElement>(null);
+	const ime = useImeCompositionGuard();
 	const icon = getFileIcon(entry.name, entry.isDirectory, isExpanded);
 
 	const hasDraftRef = useRef(draftValue !== undefined);
@@ -193,6 +195,8 @@ export function FileTreeNodeView({
 	}
 
 	function handleRenameKeyDown(e: React.KeyboardEvent) {
+		// 中文等组合输入的回车用于确认候选词，不能当作提交；Escape 也交还给输入法取消候选。
+		if (ime.shouldIgnoreKey(e)) return;
 		if (e.key === "Enter") {
 			e.preventDefault();
 			handleRenameSubmit();
@@ -313,6 +317,8 @@ export function FileTreeNodeView({
 						onChange={(e) => setRenameValue(e.target.value)}
 						onBlur={handleRenameBlur}
 						onKeyDown={handleRenameKeyDown}
+						onCompositionStart={ime.onCompositionStart}
+						onCompositionEnd={ime.onCompositionEnd}
 						aria-invalid={renameError ? true : undefined}
 						className={cn(
 							"min-w-0 flex-1 rounded border bg-background px-1 py-0 text-[12px] text-foreground outline-none",

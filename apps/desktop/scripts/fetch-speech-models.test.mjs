@@ -4,16 +4,14 @@ import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { prepareSpeechModel, prepareSpeechModels, requiresWindowsSpeechModel } from "./fetch-speech-models.mjs";
+import { prepareSpeechModel, prepareSpeechModels, requiresSpeechModel } from "./fetch-speech-models.mjs";
 
-test("only Windows x64 artifacts require the speech model", () => {
-	assert.equal(requiresWindowsSpeechModel(["win32-x64"], {}), true);
-	assert.equal(requiresWindowsSpeechModel(["darwin-arm64"], {}), false);
-	assert.equal(requiresWindowsSpeechModel(["linux-x64"], {}), false);
-	assert.equal(
-		requiresWindowsSpeechModel(["win32-x64"], { ASTRAVIA_SPEECH_INPUT_ENABLED: "false" }),
-		false,
-	);
+test("only bundled-target artifacts require the speech model", () => {
+	assert.equal(requiresSpeechModel(["win32-x64"], {}), true);
+	assert.equal(requiresSpeechModel(["darwin-arm64"], {}), true);
+	assert.equal(requiresSpeechModel(["darwin-x64"], {}), true);
+	assert.equal(requiresSpeechModel(["linux-x64"], {}), false);
+	assert.equal(requiresSpeechModel(["win32-x64"], { ASTRAVIA_SPEECH_INPUT_ENABLED: "false" }), false);
 });
 
 test("downloads, verifies, and reuses a prepared model", async () => {
@@ -57,11 +55,11 @@ test("downloads, verifies, and reuses a prepared model", async () => {
 	}
 });
 
-test("does not read or download the model for non-Windows targets", async () => {
+test("does not read or download the model for unsupported targets", async () => {
 	let requested = false;
 	const result = await prepareSpeechModels({
 		env: {},
-		platformTags: ["darwin-arm64"],
+		platformTags: ["linux-x64"],
 		manifestPath: "missing.json",
 		fetchImpl: async () => {
 			requested = true;
@@ -73,7 +71,7 @@ test("does not read or download the model for non-Windows targets", async () => 
 	assert.equal(requested, false);
 });
 
-test("does not read or download the model for a disabled Windows build", async () => {
+test("does not read or download the model for a disabled speech build", async () => {
 	let requested = false;
 	const messages = [];
 	const result = await prepareSpeechModels({

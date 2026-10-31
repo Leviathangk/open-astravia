@@ -16,6 +16,7 @@ import {
 } from "@astravia/runtime-storage/conversation";
 import { documentFromFile, encodeConversationSessionId, parseConversationFile } from "./conversation-file-codec.js";
 import { acquireConversationFileLock } from "./conversation-file-lock.js";
+import { resolveSessionIdFromPath } from "./conversation-file-path.js";
 import { FileConversationOwnershipManager } from "./conversation-ownership-lease.js";
 import { FileConversationRepository } from "./file-conversation-repository.js";
 import { nodeErrorCode } from "./node-error-code.js";
@@ -121,16 +122,18 @@ export class FileConversationRuntimeSessionCatalog implements RuntimeSessionCata
 
 	async deleteSessionArtifacts(sessionPath: string): Promise<void> {
 		const path = resolve(sessionPath);
-		await requireConversationHeader(path);
+		const sessionId = await resolveDeletableSessionId(path);
 		const lease = await this.ownershipManager.acquire(path);
 		let releaseFileLock: (() => Promise<void>) | undefined;
 		try {
-			const header = await requireConversationHeader(path);
-			releaseFileLock = await acquireConversationFileLock(`${path}.lock`, header.sessionId);
-			await this.artifactCleaner?.deleteSessionArtifacts(header.sessionId);
-			await rm(join(dirname(path), `${encodeConversationSessionId(header.sessionId)}.snapshot.json`), {
+			releaseFileLock = await acquireConversationFileLock(`${path}.lock`, sessionId);
+			await this.artifactCleaner?.deleteSessionArtifacts(sessionId);
+			await rm(join(dirname(path), `${encodeConversationSessionId(sessionId)}.snapshot.json`), {
 				force: true,
 			});
+			// 未发送输入队列是独立 sidecar，主文件删掉后它会永久留在目录里；下一次恢复
+			// 也可能把它当成某个新会话的待发队列。
+			await rm(`${path}.queue.json`, { force: true });
 			await rm(path, { force: true });
 		} finally {
 			await releaseFileLock?.();
@@ -280,7 +283,9 @@ async function readDegradedSessionHistoryInfo(
 ): Promise<SessionHistoryInfo | undefined> {
 	try {
 		const header = await readConversationHeader(sessionPath);
-		if (!header || !isCanonicalConversationPath(sessionPath, header.sessionId)) return undefined;
+		if (!header || !isCanonicalConversationPath(sessionPath, header.sessionId)) {
+			return await recoverDamagedSessionHistoryInfo(sessionPath, fallbackCwd);
+		}
 		// v1 文件头只有 sessionId/createdAt：身份与父子关系只在 v2 头上才有。
 		const agentId = "agentId" in header ? header.agentId : undefined;
 		const cwd = "cwd" in header ? header.cwd : undefined;
@@ -297,6 +302,36 @@ async function readDegradedSessionHistoryInfo(
 			...(parentEntryId === undefined ? {} : { parentEntryId }),
 		};
 		return info;
+	} catch {
+		return await recoverDamagedSessionHistoryInfo(sessionPath, fallbackCwd);
+	}
+}
+
+/**
+ * 文件头读不出来时的最后一级兜底。
+ *
+ * 会话文件被并发删除或迁移打断后，磁盘上可能只剩若干条没有文件头的记录。这里如果
+ * 直接放弃，用户看到的就是「会话凭空消失」，而文件明明还在。目录名和文件名都是可逆
+ * 编码，所以至少能把 id 与修改时间还原出来，让这个会话继续可见（打开时会明确报错，
+ * 也仍然可以删除），而不是静默从侧栏里抹掉。
+ */
+async function recoverDamagedSessionHistoryInfo(
+	sessionPath: string,
+	fallbackCwd: string,
+): Promise<SessionHistoryInfo | undefined> {
+	const path = resolve(sessionPath);
+	const sessionId = resolveSessionIdFromPath(dirname(path), path);
+	if (!sessionId) return undefined;
+	try {
+		const stats = await stat(path);
+		if (!stats.isFile()) return undefined;
+		return {
+			id: sessionId,
+			path,
+			cwd: fallbackCwd,
+			firstMessage: NO_MESSAGES_PLACEHOLDER,
+			modifiedAt: stats.mtimeMs,
+		};
 	} catch {
 		return undefined;
 	}
@@ -330,6 +365,23 @@ function extractMessageText(content: unknown): string | undefined {
 function normalizeMessageText(text: string): string | undefined {
 	const normalized = text.replace(/\s+/g, " ").trim();
 	return normalized || undefined;
+}
+
+/**
+ * 解析待删除会话的 id。
+ *
+ * 正常会话用文件头；文件头已经读不出来的损坏会话退回文件名里的可逆编码——否则这个
+ * 打不开的条目会永久占着侧栏，用户连删掉它都做不到。
+ */
+async function resolveDeletableSessionId(sessionPath: string): Promise<string> {
+	const header = await readConversationHeader(sessionPath).catch((error: unknown) => {
+		if (nodeErrorCode(error) === "ENOENT") throw error;
+		return undefined;
+	});
+	if (header && isCanonicalConversationPath(sessionPath, header.sessionId)) return header.sessionId;
+	const sessionId = resolveSessionIdFromPath(dirname(sessionPath), sessionPath);
+	if (!sessionId) throw new Error(`Unsupported native conversation file: ${sessionPath}`);
+	return sessionId;
 }
 
 async function requireConversationHeader(sessionPath: string): Promise<ReadConversationFileHeader> {
